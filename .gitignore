@@ -1,0 +1,23 @@
+# Binary files
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output files
+*.out
+
+# Go related
+/vendor/
+/go.sum
+
+# Editor files
+.idea/
+.vscode/
+*.swp
+*.swo

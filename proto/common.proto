@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package nfs;
+
+option go_package = "github.com/example/nfsserver/pkg/api;api";
+
+// Status represents the result of an NFS operation
+enum Status {
+  OK = 0;                  // Success
+  ERR_PERM = 1;            // Not owner
+  ERR_NOENT = 2;           // No such file or directory
+  ERR_IO = 5;              // I/O error
+  ERR_NXIO = 6;            // No such device or address
+  ERR_ACCES = 13;          // Permission denied
+  ERR_EXIST = 17;          // File exists
+  ERR_NODEV = 19;          // No such device
+  ERR_NOTDIR = 20;         // Not a directory
+  ERR_ISDIR = 21;          // Is a directory
+  ERR_INVAL = 22;          // Invalid argument
+  ERR_FBIG = 27;           // File too large
+  ERR_NOSPC = 28;          // No space left on device
+  ERR_ROFS = 30;           // Read-only file system
+  ERR_NAMETOOLONG = 63;    // Filename too long
+  ERR_NOTEMPTY = 66;       // Directory not empty
+  ERR_DQUOT = 69;          // Disk quota exceeded
+  ERR_STALE = 70;          // Stale file handle
+  ERR_BADHANDLE = 10001;   // Illegal NFS file handle
+  ERR_NOT_SYNC = 10002;    // Update synchronization mismatch
+  ERR_BAD_COOKIE = 10003;  // READDIR or READDIRPLUS cookie is stale
+  ERR_NOTSUPP = 10004;     // Operation not supported
+  ERR_TOOSMALL = 10005;    // Buffer or request is too small
+  ERR_SERVERFAULT = 10006; // Server fault
+  ERR_BADTYPE = 10007;     // Type not supported
+  ERR_JUKEBOX = 10008;     // Delay; operation requires human intervention
+}
+
+// FileType represents the type of a file
+enum FileType {
+  REGULAR = 0;      // Regular file
+  DIRECTORY = 1;    // Directory
+  SYMLINK = 2;      // Symbolic link
+  BLOCK = 3;        // Block special device
+  CHAR = 4;         // Character special device
+  FIFO = 5;         // Named pipe
+  SOCKET = 6;       // Socket
+}
+
+// Credentials represents the authentication credentials of a client
+message Credentials {
+  uint32 uid = 1;                // User ID
+  uint32 gid = 2;                // Primary group ID
+  repeated uint32 groups = 3;    // Supplementary group IDs
+  string machine_name = 4;       // Client hostname
+}
+
+// FileTime represents a file timestamp
+message FileTime {
+  int64 seconds = 1;    // Seconds since epoch
+  int32 nano = 2;       // Nanoseconds
+}
+
+// FileAttributes contains the attributes of a file
+message FileAttributes {
+  FileType type = 1;         // File type
+  uint32 mode = 2;           // Permission bits
+  uint32 nlink = 3;          // Number of hard links
+  uint32 uid = 4;            // User ID of owner
+  uint32 gid = 5;            // Group ID of owner
+  uint64 size = 6;           // File size in bytes
+  uint64 used = 7;           // Bytes actually used by file
+  uint32 rdev_major = 8;     // Device ID major component
+  uint32 rdev_minor = 9;     // Device ID minor component
+  uint64 fsid = 10;          // File system ID
+  uint64 fileid = 11;        // File ID (inode number)
+  FileTime atime = 12;       // Last access time
+  FileTime mtime = 13;       // Last modification time
+  FileTime ctime = 14;       // Last status change time
+  uint32 blksize = 15;       // Preferred block size
+  uint32 blocks = 16;        // Number of blocks allocated
+}

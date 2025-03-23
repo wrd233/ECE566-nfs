@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package nfs;
+
+option go_package = "github.com/example/nfsserver/pkg/api;api";
+
+import "proto/common.proto";
+
+// NFSService defines the NFS operations supported by the server
+service NFSService {
+  // Get file attributes
+  rpc GetAttr(GetAttrRequest) returns (GetAttrResponse);
+  
+  // Look up a file name in a directory
+  rpc Lookup(LookupRequest) returns (LookupResponse);
+  
+  // Read from a file
+  rpc Read(ReadRequest) returns (ReadResponse);
+  
+  // Write to a file
+  rpc Write(WriteRequest) returns (WriteResponse);
+}
+
+// GetAttrRequest is used to get file attributes
+message GetAttrRequest {
+  bytes file_handle = 1;     // File handle
+  Credentials credentials = 2;   // Authentication credentials
+}
+
+// GetAttrResponse contains the file attributes or an error
+message GetAttrResponse {
+  Status status = 1;             // Result status
+  FileAttributes attributes = 2;  // File attributes (if successful)
+}
+
+// LookupRequest is used to look up a file name in a directory
+message LookupRequest {
+  bytes directory_handle = 1;   // Directory handle
+  string name = 2;             // Name to look up
+  Credentials credentials = 3;  // Authentication credentials
+}
+
+// LookupResponse contains the result of a lookup operation
+message LookupResponse {
+  Status status = 1;              // Result status
+  bytes file_handle = 2;          // File handle (if found)
+  FileAttributes attributes = 3;   // File attributes (if found)
+  FileAttributes dir_attributes = 4; // Directory attributes (if requested)
+}
+
+// ReadRequest is used to read from a file
+message ReadRequest {
+  bytes file_handle = 1;     // File handle
+  Credentials credentials = 2;   // Authentication credentials
+  uint64 offset = 3;         // Starting offset
+  uint32 count = 4;          // Number of bytes to read
+}
+
+// ReadResponse contains the result of a read operation
+message ReadResponse {
+  Status status = 1;              // Result status
+  FileAttributes attributes = 2;   // File attributes
+  bytes data = 3;                // Data read from file
+  bool eof = 4;                  // End of file indicator
+}
+
+// WriteRequest is used to write to a file
+message WriteRequest {
+  bytes file_handle = 1;     // File handle
+  Credentials credentials = 2;   // Authentication credentials
+  uint64 offset = 3;         // Starting offset
+  bytes data = 4;            // Data to write
+  uint32 stability = 5;      // Requested stability level (0=UNSTABLE, 1=DATA_SYNC, 2=FILE_SYNC)
+}
+
+// WriteResponse contains the result of a write operation
+message WriteResponse {
+  Status status = 1;              // Result status
+  FileAttributes attributes = 2;   // File attributes
+  uint32 count = 3;              // Number of bytes written
+  uint32 stability = 4;          // Stability level used
+  uint64 verifier = 5;           // Write verifier (used for cached writes)
+}

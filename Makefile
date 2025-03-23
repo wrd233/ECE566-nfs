@@ -1,27 +1,48 @@
-.PHONY: proto build run-server run-client test clean
+.PHONY: proto build test clean run-server run-client
 
-# Compile proto files
+# Define directories
+BIN_DIR := bin
+PROTO_DIR := proto
+
+# Compiles protobuf files
 proto:
-	protoc --go_out=. --go_opt=paths=source_relative 		--go-grpc_out=. --go-grpc_opt=paths=source_relative 		proto/greeter.proto
+	@echo "Generating protobuf code..."
+	mkdir -p pkg/api
+	protoc -I. \
+		--go_out=pkg/api --go_opt=module=github.com/example/nfsserver/pkg/api \
+		--go-grpc_out=pkg/api --go-grpc_opt=module=github.com/example/nfsserver/pkg/api \
+		proto/*.proto
 
 # Build server and client
-build:
-	go build -o bin/server cmd/server/main.go
-	go build -o bin/client cmd/client/main.go
+build: proto
+	@echo "Building NFS server and client..."
+	mkdir -p $(BIN_DIR)
+	go build -o $(BIN_DIR)/nfsserver cmd/server/main.go
+	go build -o $(BIN_DIR)/nfsclient cmd/client/main.go
+	go build -o $(BIN_DIR)/gethandle cmd/tools/gethandle.go
 
 # Run server
-run-server:
-	go run cmd/server/main.go
+run-server: build
+	@echo "Starting NFS server..."
+	$(BIN_DIR)/nfsserver
 
 # Run client
-run-client:
-	go run cmd/client/main.go
+run-client: build
+	@echo "Running NFS client..."
+	$(BIN_DIR)/nfsclient
+
+# Get file handle
+get-handle: build
+	@echo "Getting file handle..."
+	$(BIN_DIR)/gethandle
 
 # Run tests
 test:
+	@echo "Running tests..."
 	go test ./...
 
 # Clean generated files
 clean:
-	rm -f proto/*.pb.go
-	rm -rf bin/
+	@echo "Cleaning up..."
+	rm -rf $(BIN_DIR)
+	rm -f pkg/api/*.pb.go

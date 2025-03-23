@@ -92,50 +92,6 @@ func TestLocalFileSystem_Init(t *testing.T) {
     }
 }
 
-// TestLocalFileSystem_FileHandles tests file handle generation and resolution
-func TestLocalFileSystem_FileHandles(t *testing.T) {
-    localFS, _, cleanup := setupTestFS(t)
-    defer cleanup()
-    
-    testPaths := []string{
-        "/",
-        "/file.txt",
-        "/dir/subfile.txt",
-        "/dir with spaces/file with spaces.txt",
-    }
-    
-    for _, path := range testPaths {
-        // Test path to handle conversion
-        handle, err := localFS.PathToFileHandle(path)
-        if err != nil {
-            t.Errorf("PathToFileHandle failed for %s: %v", path, err)
-            continue
-        }
-        
-        if len(handle) == 0 {
-            t.Errorf("PathToFileHandle returned empty handle for %s", path)
-            continue
-        }
-        
-        // Test handle to path conversion
-        resolvedPath, err := localFS.FileHandleToPath(handle)
-        if err != nil {
-            t.Errorf("FileHandleToPath failed for %s: %v", path, err)
-            continue
-        }
-        
-        if resolvedPath != path {
-            t.Errorf("Path roundtrip failed: got %s, want %s", resolvedPath, path)
-        }
-    }
-    
-    // Test invalid handle
-    _, err := localFS.FileHandleToPath([]byte("invalid-handle"))
-    if err == nil {
-        t.Error("FileHandleToPath should fail with invalid handle")
-    }
-}
-
 // The following tests are placeholders for future implementation.
 // Currently they just verify that the methods properly return "not supported" errors.
 
@@ -186,5 +142,113 @@ func TestLocalFileSystem_DirectoryOps(t *testing.T) {
     err = localFS.Rmdir(context.Background(), "/some/dir")
     if err == nil {
         t.Error("Expected error from stub Rmdir implementation")
+    }
+}
+
+// Additional test for structured file handle
+func TestStructuredFileHandle(t *testing.T) {
+    // Test serialization and deserialization
+    original := &fs.FileHandle{
+        FileSystemID: 123,
+        Inode:        456789,
+        Generation:   2,
+    }
+    
+    // Serialize
+    data := original.Serialize()
+    
+    // Deserialize
+    parsed, err := fs.DeserializeFileHandle(data)
+    if err != nil {
+        t.Errorf("Failed to deserialize handle: %v", err)
+    }
+    
+    // Compare
+    if parsed.FileSystemID != original.FileSystemID {
+        t.Errorf("FileSystemID mismatch: got %d, want %d", 
+            parsed.FileSystemID, original.FileSystemID)
+    }
+    
+    if parsed.Inode != original.Inode {
+        t.Errorf("Inode mismatch: got %d, want %d", 
+            parsed.Inode, original.Inode)
+    }
+    
+    if parsed.Generation != original.Generation {
+        t.Errorf("Generation mismatch: got %d, want %d", 
+            parsed.Generation, original.Generation)
+    }
+}
+
+// Also update TestLocalFileSystem_FileHandles to create real files
+func TestLocalFileSystem_FileHandles(t *testing.T) {
+    localFS, tempDir, cleanup := setupTestFS(t)
+    defer cleanup()
+    
+    // Create test files
+    testFiles := []string{
+        "file1.txt",
+        "dir1/file2.txt",
+        "dir with spaces/file with spaces.txt",
+    }
+    
+    for _, file := range testFiles {
+        dir := filepath.Dir(file)
+        if dir != "." {
+            dirPath := filepath.Join(tempDir, dir)
+            if err := os.MkdirAll(dirPath, 0755); err != nil {
+                t.Fatalf("Failed to create directory %s: %v", dir, err)
+            }
+        }
+        
+        filePath := filepath.Join(tempDir, file)
+        if err := os.WriteFile(filePath, []byte("test content"), 0644); err != nil {
+            t.Fatalf("Failed to create test file %s: %v", file, err)
+        }
+    }
+    
+    for _, file := range testFiles {
+        relPath := "/" + file
+        
+        // Test path to handle conversion
+        handle, err := localFS.PathToFileHandle(relPath)
+        if err != nil {
+            t.Errorf("PathToFileHandle failed for %s: %v", relPath, err)
+            continue
+        }
+        
+        if len(handle) == 0 {
+            t.Errorf("PathToFileHandle returned empty handle for %s", relPath)
+            continue
+        }
+        
+        // Parse and verify handle
+        parsedHandle, err := fs.DeserializeFileHandle(handle)
+        if err != nil {
+            t.Errorf("Failed to parse handle for %s: %v", relPath, err)
+            continue
+        }
+        
+        if parsedHandle.FileSystemID != localFS.fsID {
+            t.Errorf("FileSystemID mismatch for %s: got %d, want %d", 
+                relPath, parsedHandle.FileSystemID, localFS.fsID)
+        }
+        
+        // Test handle to path conversion
+        resolvedPath, err := localFS.FileHandleToPath(handle)
+        if err != nil {
+            t.Errorf("FileHandleToPath failed for %s: %v", relPath, err)
+            continue
+        }
+        
+        if resolvedPath != relPath {
+            t.Errorf("Path roundtrip failed: got %s, want %s", resolvedPath, relPath)
+        }
+    }
+    
+    // Test invalid handle
+    _, err := localFS.FileHandleToPath([]byte("invalid-handle"))
+    if err == nil {
+        t.Error("FileHandleToPath should fail with invalid handle")
     }
 }

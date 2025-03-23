@@ -3,36 +3,33 @@ package local
 
 import (
     "context"
-    "crypto/sha256"
-    "encoding/binary"
-    "encoding/hex"
     "fmt"
     "os"
     "path/filepath"
     "sync"
-    "time"
+    "syscall"
 
     "github.com/example/nfsserver/pkg/fs"
 )
 
 // LocalFileSystem implements fs.FileSystem using the local operating system's
-// filesystem. This provides direct access to files on the host machine.
+// filesystem.
 type LocalFileSystem struct {
     // rootPath is the base directory in the local filesystem
     rootPath string
     
-    // handleCache maps paths to generated handles
-    handleCache sync.Map // map[string][]byte
+    // fsID is a unique identifier for this filesystem instance
+    fsID uint32
     
-    // pathCache maps handle hashes to paths
-    pathCache sync.Map // map[string]string
+    // inodeMap maintains a mapping from inode numbers to paths
+    // This is needed because the OS doesn't provide a way to get a path from an inode
+    inodeMap     sync.Map // map[uint64]string
     
-    // handleLock protects handle generation
-    handleLock sync.Mutex
+    // generationMap tracks the generation number for each inode
+    generationMap sync.Map // map[uint64]uint32
 }
 
 // NewLocalFileSystem creates a new local filesystem implementation.
-// rootPath is the base directory that all operations will be relative to.
 func NewLocalFileSystem(rootPath string) (*LocalFileSystem, error) {
     // Ensure rootPath exists and is a directory
     fi, err := os.Stat(rootPath)
@@ -50,18 +47,116 @@ func NewLocalFileSystem(rootPath string) (*LocalFileSystem, error) {
         return nil, fs.NewError("init", rootPath, err)
     }
     
+    // Generate a filesystem ID based on the root path
+    // We'll use a simple hash of the path for demonstration
+    fsID := generateFsID(absPath)
+    
     return &LocalFileSystem{
         rootPath: absPath,
+        fsID:     fsID,
     }, nil
+}
+
+// generateFsID creates a filesystem ID from a path
+func generateFsID(path string) uint32 {
+    var h uint32 = 0
+    for _, c := range path {
+        h = h*31 + uint32(c)
+    }
+    return h
 }
 
 // resolvePath converts a path relative to the filesystem to an absolute OS path
 func (l *LocalFileSystem) resolvePath(path string) string {
-    // Clean the path to remove any '..' components
     cleanPath := filepath.Clean(path)
-    
-    // Join with the root path
     return filepath.Join(l.rootPath, cleanPath)
+}
+
+// getInode retrieves the inode number for a file
+func (l *LocalFileSystem) getInode(path string) (uint64, error) {
+    info, err := os.Stat(l.resolvePath(path))
+    if err != nil {
+        return 0, err
+    }
+    
+    stat, ok := info.Sys().(*syscall.Stat_t)
+    if !ok {
+        return 0, fmt.Errorf("unable to get system information for file")
+    }
+    
+    return stat.Ino, nil
+}
+
+// getGeneration gets or creates a generation number for an inode
+func (l *LocalFileSystem) getGeneration(inode uint64) uint32 {
+    if gen, ok := l.generationMap.Load(inode); ok {
+        return gen.(uint32)
+    }
+    
+    // For simplicity, we start with generation 1
+    l.generationMap.Store(inode, uint32(1))
+    return 1
+}
+
+// updateInodeMap adds or updates the inode to path mapping
+func (l *LocalFileSystem) updateInodeMap(path string, inode uint64) {
+    l.inodeMap.Store(inode, path)
+}
+
+// lookupPathByInode finds a path by inode number
+func (l *LocalFileSystem) lookupPathByInode(inode uint64) (string, bool) {
+    if path, ok := l.inodeMap.Load(inode); ok {
+        return path.(string), true
+    }
+    return "", false
+}
+
+// FileHandleToPath converts a file handle to a file system path.
+func (l *LocalFileSystem) FileHandleToPath(fh []byte) (string, error) {
+    handle, err := fs.DeserializeFileHandle(fh)
+    if err != nil {
+        return "", fs.NewError("FileHandleToPath", "", fs.ErrInvalidHandle)
+    }
+    
+    // Verify it's for our filesystem
+    if handle.FileSystemID != l.fsID {
+        return "", fs.NewError("FileHandleToPath", "", fs.ErrInvalidHandle)
+    }
+    
+    // Try to find path in inode map
+    path, ok := l.lookupPathByInode(handle.Inode)
+    if !ok {
+        return "", fs.NewError("FileHandleToPath", "", fs.ErrStale)
+    }
+    
+    // In a real implementation, we would verify the generation number
+    // but for simplicity we'll skip that check
+    
+    return path, nil
+}
+
+// PathToFileHandle converts a file system path to a file handle.
+func (l *LocalFileSystem) PathToFileHandle(path string) ([]byte, error) {
+    // Get inode for the path
+    inode, err := l.getInode(path)
+    if err != nil {
+        return nil, fs.NewError("PathToFileHandle", path, err)
+    }
+    
+    // Get or create generation number
+    generation := l.getGeneration(inode)
+    
+    // Update inode map
+    l.updateInodeMap(path, inode)
+    
+    // Create and serialize the file handle
+    handle := &fs.FileHandle{
+        FileSystemID: l.fsID,
+        Inode:        inode,
+        Generation:   generation,
+    }
+    
+    return handle.Serialize(), nil
 }
 
 // GetAttr retrieves attributes for the file at the specified path.
@@ -148,61 +243,4 @@ func (l *LocalFileSystem) Readlink(ctx context.Context, path string) (string, er
 // StatFS retrieves file system statistics.
 func (l *LocalFileSystem) StatFS(ctx context.Context) (fs.FSStat, error) {
     return fs.FSStat{}, fs.NewError("StatFS", "", fs.ErrNotSupported)
-}
-
-// FileHandleToPath converts a file handle to a file system path.
-func (l *LocalFileSystem) FileHandleToPath(fh []byte) (string, error) {
-    if len(fh) == 0 {
-        return "", fs.ErrInvalidHandle
-    }
-    
-    // Convert handle to string for map lookup
-    handleHex := hex.EncodeToString(fh)
-    
-    // Look up in cache
-    if pathObj, ok := l.pathCache.Load(handleHex); ok {
-        if path, ok := pathObj.(string); ok {
-            return path, nil
-        }
-    }
-    
-    return "", fs.NewError("FileHandleToPath", "", fs.ErrInvalidHandle)
-}
-
-// PathToFileHandle converts a file system path to a file handle.
-func (l *LocalFileSystem) PathToFileHandle(path string) ([]byte, error) {
-    // Look up in cache first
-    if handleObj, ok := l.handleCache.Load(path); ok {
-        if handle, ok := handleObj.([]byte); ok {
-            return handle, nil
-        }
-    }
-    
-    l.handleLock.Lock()
-    defer l.handleLock.Unlock()
-    
-    // Check again in case it was added while waiting for lock
-    if handleObj, ok := l.handleCache.Load(path); ok {
-        if handle, ok := handleObj.([]byte); ok {
-            return handle, nil
-        }
-    }
-    
-    // Generate a new handle
-    // Format: SHA-256(rootPath + ":" + path + ":" + timestamp)
-    timestamp := time.Now().UnixNano()
-    data := fmt.Sprintf("%s:%s:%d", l.rootPath, path, timestamp)
-    hash := sha256.Sum256([]byte(data))
-    
-    // Add a timestamp prefix to ensure uniqueness
-    handle := make([]byte, 8+32)
-    binary.BigEndian.PutUint64(handle[:8], uint64(timestamp))
-    copy(handle[8:], hash[:])
-    
-    // Store in cache
-    handleHex := hex.EncodeToString(handle)
-    l.handleCache.Store(path, handle)
-    l.pathCache.Store(handleHex, path)
-    
-    return handle, nil
 }

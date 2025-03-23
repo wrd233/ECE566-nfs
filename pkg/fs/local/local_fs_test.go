@@ -407,3 +407,211 @@ func TestResolvePath(t *testing.T) {
         t.Errorf("resolvePath result mismatch: got %q, want %q", result, expected)
     }
 }
+
+
+// TestLookup tests the Lookup method
+func TestLookup(t *testing.T) {
+    localFS, tempDir, cleanup := setupTestFS(t)
+    defer cleanup()
+    
+    // Create test directory
+    testDirName := "testdir"
+    testDir := createTestDir(t, tempDir, testDirName)
+    
+    // Create test file inside directory
+    testFileName := "testfile.txt"
+    testContent := "test content"
+    _ = createTestFile(t, testDir, testFileName, testContent)
+    
+    // Test looking up the file in the directory
+    filePath, fileInfo, err := localFS.Lookup(context.Background(), "/"+testDirName, testFileName)
+    if err != nil {
+        t.Fatalf("Lookup failed: %v", err)
+    }
+    
+    // Check path
+    expectedPath := "/" + testDirName + "/" + testFileName
+    if filePath != expectedPath {
+        t.Errorf("Wrong path: got %q, want %q", filePath, expectedPath)
+    }
+    
+    // Check file type
+    if fileInfo.Type != fs.FileTypeRegular {
+        t.Errorf("Wrong file type: got %v, want %v", fileInfo.Type, fs.FileTypeRegular)
+    }
+    
+    // Check size
+    if fileInfo.Size != int64(len(testContent)) {
+        t.Errorf("Wrong size: got %d, want %d", fileInfo.Size, len(testContent))
+    }
+    
+    // Test looking up non-existent file
+    _, _, err = localFS.Lookup(context.Background(), "/"+testDirName, "nonexistent.txt")
+    if err == nil {
+        t.Error("Lookup should fail for non-existent file")
+    }
+    
+    // Test looking up in non-existent directory
+    _, _, err = localFS.Lookup(context.Background(), "/nonexistent", testFileName)
+    if err == nil {
+        t.Error("Lookup should fail for non-existent directory")
+    }
+    
+    // Test looking up in a file (not a directory)
+    _, _, err = localFS.Lookup(context.Background(), "/"+testDirName+"/"+testFileName, "anything")
+    if err == nil {
+        t.Error("Lookup should fail when directory is actually a file")
+    }
+}
+
+// TestRead tests the Read method
+func TestRead(t *testing.T) {
+    localFS, tempDir, cleanup := setupTestFS(t)
+    defer cleanup()
+    
+    // Create test file
+    testFileName := "testfile.txt"
+    testContent := "abcdefghijklmnopqrstuvwxyz"
+    _ = createTestFile(t, tempDir, testFileName, testContent)
+    
+    // Test reading entire file
+    data, eof, err := localFS.Read(context.Background(), "/"+testFileName, 0, len(testContent))
+    if err != nil {
+        t.Fatalf("Read failed: %v", err)
+    }
+    
+    if string(data) != testContent {
+        t.Errorf("Read content mismatch: got %q, want %q", string(data), testContent)
+    }
+    
+    if !eof {
+        t.Error("Expected EOF when reading to end of file")
+    }
+    
+    // Test reading part of file
+    data, eof, err = localFS.Read(context.Background(), "/"+testFileName, 3, 5)
+    if err != nil {
+        t.Fatalf("Partial read failed: %v", err)
+    }
+    
+    if string(data) != "defgh" {
+        t.Errorf("Partial read content mismatch: got %q, want %q", string(data), "defgh")
+    }
+    
+    if eof {
+        t.Error("Shouldn't get EOF when reading part of file")
+    }
+    
+    // Test reading past end of file
+    data, eof, err = localFS.Read(context.Background(), "/"+testFileName, 20, 10)
+    if err != nil {
+        t.Fatalf("Read past EOF failed: %v", err)
+    }
+    
+    if string(data) != "uvwxyz" {
+        t.Errorf("Read past EOF content mismatch: got %q, want %q", string(data), "uvwxyz")
+    }
+    
+    if !eof {
+        t.Error("Expected EOF when reading past end of file")
+    }
+    
+    // Test reading from offset beyond file size
+    data, eof, err = localFS.Read(context.Background(), "/"+testFileName, 30, 10)
+    if err != nil {
+        t.Fatalf("Read from beyond file size failed: %v", err)
+    }
+    
+    if len(data) != 0 {
+        t.Errorf("Read from beyond file size returned data: %q", string(data))
+    }
+    
+    if !eof {
+        t.Error("Expected EOF when reading from beyond file size")
+    }
+    
+    // Test reading non-existent file
+    _, _, err = localFS.Read(context.Background(), "/nonexistent.txt", 0, 10)
+    if err == nil {
+        t.Error("Read should fail for non-existent file")
+    }
+    
+    // Test reading directory
+    _ = createTestDir(t, tempDir, "testdir")
+    _, _, err = localFS.Read(context.Background(), "/testdir", 0, 10)
+    if err == nil || !errors.Is(err, fs.ErrIsDir) {
+        t.Errorf("Read should fail with IsDir error for directory, got: %v", err)
+    }
+}
+
+// TestWrite tests the Write method
+func TestWrite(t *testing.T) {
+    localFS, tempDir, cleanup := setupTestFS(t)
+    defer cleanup()
+    
+    // Create empty test file
+    testFileName := "writefile.txt"
+    emptyFile := createTestFile(t, tempDir, testFileName, "")
+    
+    // Test writing to file
+    testData := "Hello, World!"
+    bytesWritten, err := localFS.Write(context.Background(), "/"+testFileName, 0, []byte(testData), false)
+    if err != nil {
+        t.Fatalf("Write failed: %v", err)
+    }
+    
+    if bytesWritten != len(testData) {
+        t.Errorf("Wrong bytes written: got %d, want %d", bytesWritten, len(testData))
+    }
+    
+    // Read file content to verify
+    content, err := os.ReadFile(emptyFile)
+    if err != nil {
+        t.Fatalf("Failed to read file content: %v", err)
+    }
+    
+    if string(content) != testData {
+        t.Errorf("File content mismatch: got %q, want %q", string(content), testData)
+    }
+    
+    // Test writing at offset
+    moreData := "Additional data"
+    bytesWritten, err = localFS.Write(context.Background(), "/"+testFileName, 7, []byte(moreData), false)
+    if err != nil {
+        t.Fatalf("Write at offset failed: %v", err)
+    }
+    
+    if bytesWritten != len(moreData) {
+        t.Errorf("Wrong bytes written at offset: got %d, want %d", bytesWritten, len(moreData))
+    }
+    
+    // Read updated content
+    content, err = os.ReadFile(emptyFile)
+    if err != nil {
+        t.Fatalf("Failed to read updated file content: %v", err)
+    }
+    
+    expectedContent := "Hello, Additional data"
+    if string(content) != expectedContent {
+        t.Errorf("Updated content mismatch: got %q, want %q", string(content), expectedContent)
+    }
+    
+    // Test writing to non-existent file
+    _, err = localFS.Write(context.Background(), "/nonexistent.txt", 0, []byte("test"), false)
+    if err == nil {
+        t.Error("Write should fail for non-existent file")
+    }
+    
+    // Test writing to directory
+    _ = createTestDir(t, tempDir, "writedir")
+    _, err = localFS.Write(context.Background(), "/writedir", 0, []byte("test"), false)
+    if err == nil || !errors.Is(err, fs.ErrIsDir) {
+        t.Errorf("Write should fail with IsDir error for directory, got: %v", err)
+    }
+    
+    // Test sync write (just check that it doesn't error)
+    _, err = localFS.Write(context.Background(), "/"+testFileName, 0, []byte("Sync write"), true)
+    if err != nil {
+        t.Errorf("Sync write failed: %v", err)
+    }
+}

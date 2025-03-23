@@ -9,6 +9,7 @@ import (
     "strings"
     "sync"
     "syscall"
+    "io"
 
     "github.com/example/nfsserver/pkg/fs"
 )
@@ -332,22 +333,155 @@ func (l *LocalFileSystem) SetAttr(ctx context.Context, path string, attr fs.File
 
 // Lookup finds a file by name within a directory.
 func (l *LocalFileSystem) Lookup(ctx context.Context, dir string, name string) (string, fs.FileInfo, error) {
-    return "", fs.FileInfo{}, fs.NewError("Lookup", filepath.Join(dir, name), fs.ErrNotSupported)
+    // Ensure dir is actually a directory
+    dirPath, err := l.resolvePath(dir)
+    if err != nil {
+        return "", fs.FileInfo{}, fs.NewError("Lookup", dir, err)
+    }
+    
+    dirInfo, err := os.Stat(dirPath)
+    if err != nil {
+        return "", fs.FileInfo{}, fs.NewError("Lookup", dir, mapOSError(err))
+    }
+    
+    if !dirInfo.IsDir() {
+        return "", fs.FileInfo{}, fs.NewError("Lookup", dir, fs.ErrNotDir)
+    }
+    
+    // Create the full path for the target file/directory
+    targetName := filepath.Join(dir, name)
+    
+    // Get file info for the target
+    fileInfo, err := l.getFileInfo(targetName)
+    if err != nil {
+        return "", fs.FileInfo{}, fs.NewError("Lookup", targetName, err)
+    }
+    
+    // Convert to fs.FileInfo
+    fsInfo, err := l.convertFileInfo(targetName, fileInfo)
+    if err != nil {
+        return "", fs.FileInfo{}, fs.NewError("Lookup", targetName, err)
+    }
+    
+    return targetName, fsInfo, nil
+}
+
+// Read reads data from a file at the specified offset.
+func (l *LocalFileSystem) Read(ctx context.Context, path string, offset int64, length int) ([]byte, bool, error) {
+    // Resolve and validate path
+    fullPath, err := l.resolvePath(path)
+    if err != nil {
+        return nil, false, fs.NewError("Read", path, err)
+    }
+    
+    // Get file info to check if it's a regular file and get size
+    fileInfo, err := os.Stat(fullPath)
+    if err != nil {
+        return nil, false, fs.NewError("Read", path, mapOSError(err))
+    }
+    
+    if fileInfo.IsDir() {
+        return nil, false, fs.NewError("Read", path, fs.ErrIsDir)
+    }
+    
+    fileSize := fileInfo.Size()
+    
+    // Check if offset is beyond or at file size
+    if offset >= fileSize {
+        return []byte{}, true, nil // Empty data with EOF flag
+    }
+    
+    // Open the file for reading
+    file, err := os.Open(fullPath)
+    if err != nil {
+        return nil, false, fs.NewError("Read", path, mapOSError(err))
+    }
+    defer file.Close()
+    
+    // Seek to the specified offset
+    _, err = file.Seek(offset, io.SeekStart)
+    if err != nil {
+        return nil, false, fs.NewError("Read", path, mapOSError(err))
+    }
+    
+    // Determine how many bytes we can actually read
+    // If reading would go beyond EOF, limit to file size
+    bytesToRead := length
+    if offset + int64(length) > fileSize {
+        bytesToRead = int(fileSize - offset)
+    }
+    
+    // Create buffer for reading
+    buffer := make([]byte, bytesToRead)
+    
+    // Read data
+    bytesRead, err := io.ReadFull(file, buffer)
+    
+    // Adjust buffer to actual bytes read
+    buffer = buffer[:bytesRead]
+    
+    // Determine EOF: we're at EOF if the current position after reading is at or past the file size
+    eof := (offset + int64(bytesRead) >= fileSize)
+    
+    // If we got an error other than EOF, return it
+    if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+        return buffer, eof, fs.NewError("Read", path, mapOSError(err))
+    }
+    
+    return buffer, eof, nil
+}
+
+// Write writes data to a file at the specified offset.
+func (l *LocalFileSystem) Write(ctx context.Context, path string, offset int64, data []byte, sync bool) (int, error) {
+    // Resolve and validate path
+    fullPath, err := l.resolvePath(path)
+    if err != nil {
+        return 0, fs.NewError("Write", path, err)
+    }
+    
+    // Get file info to check if it's a regular file
+    fileInfo, err := os.Stat(fullPath)
+    if err != nil {
+        return 0, fs.NewError("Write", path, mapOSError(err))
+    }
+    
+    if fileInfo.IsDir() {
+        return 0, fs.NewError("Write", path, fs.ErrIsDir)
+    }
+    
+    // Open file for writing
+    file, err := os.OpenFile(fullPath, os.O_RDWR, 0)
+    if err != nil {
+        return 0, fs.NewError("Write", path, mapOSError(err))
+    }
+    defer file.Close()
+    
+    // Seek to the specified offset
+    _, err = file.Seek(offset, io.SeekStart)
+    if err != nil {
+        return 0, fs.NewError("Write", path, mapOSError(err))
+    }
+    
+    // Write data
+    bytesWritten, err := file.Write(data)
+    if err != nil {
+        return 0, fs.NewError("Write", path, mapOSError(err))
+    }
+    
+    // Sync to disk if requested
+    if sync && bytesWritten > 0 {
+        err = file.Sync()
+        if err != nil {
+            return bytesWritten, fs.NewError("Write", path, mapOSError(err))
+        }
+    }
+    
+    return bytesWritten, nil
 }
 
 // Access checks if the given credentials can access the file with the requested permission.
 func (l *LocalFileSystem) Access(ctx context.Context, path string, mode fs.FileMode, creds fs.Credentials) error {
     return fs.NewError("Access", path, fs.ErrNotSupported)
-}
-
-// Read reads data from a file at the specified offset.
-func (l *LocalFileSystem) Read(ctx context.Context, path string, offset int64, length int) ([]byte, bool, error) {
-    return nil, false, fs.NewError("Read", path, fs.ErrNotSupported)
-}
-
-// Write writes data to a file at the specified offset.
-func (l *LocalFileSystem) Write(ctx context.Context, path string, offset int64, data []byte, sync bool) (int, error) {
-    return 0, fs.NewError("Write", path, fs.ErrNotSupported)
 }
 
 // Create creates a new file in the specified directory.

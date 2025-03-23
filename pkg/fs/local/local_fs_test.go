@@ -7,6 +7,7 @@ import (
     "os"
     "path/filepath"
     "testing"
+    "syscall"
     
     "github.com/example/nfsserver/pkg/fs"
 )
@@ -794,5 +795,228 @@ func TestRmdir(t *testing.T) {
     err = localFS.Rmdir(context.Background(), "/testfile.txt")
     if err == nil || !errors.Is(err, fs.ErrNotDir) {
         t.Errorf("Rmdir should fail with NotDir error for file, got: %v", err)
+    }
+}
+
+// TestSetAttr tests the SetAttr method
+func TestSetAttr(t *testing.T) {
+    localFS, tempDir, cleanup := setupTestFS(t)
+    defer cleanup()
+    
+    // Create test file
+    testFile := createTestFile(t, tempDir, "setattr.txt", "test content")
+    relPath := "/" + filepath.Base(testFile)
+    
+    // Test setting mode
+    mode := fs.FileMode(0600)
+    info, err := localFS.SetAttr(context.Background(), relPath, fs.FileAttr{
+        Mode: &mode,
+    })
+    if err != nil {
+        t.Fatalf("SetAttr failed for mode: %v", err)
+    }
+    
+    if info.Mode&0777 != mode {
+        t.Errorf("Mode not set correctly: got %o, want %o", info.Mode&0777, mode)
+    }
+    
+    // Test truncating file
+    size := int64(5)
+    info, err = localFS.SetAttr(context.Background(), relPath, fs.FileAttr{
+        Size: &size,
+    })
+    if err != nil {
+        t.Fatalf("SetAttr failed for size: %v", err)
+    }
+    
+    if info.Size != size {
+        t.Errorf("Size not set correctly: got %d, want %d", info.Size, size)
+    }
+    
+    // Verify content was truncated
+    content, err := os.ReadFile(testFile)
+    if err != nil {
+        t.Fatalf("Failed to read file: %v", err)
+    }
+    
+    if string(content) != "test " {
+        t.Errorf("File content not truncated correctly: got %q, want %q", string(content), "test ")
+    }
+    
+    // Test non-existent file
+    _, err = localFS.SetAttr(context.Background(), "/nonexistent.txt", fs.FileAttr{})
+    if err == nil {
+        t.Error("SetAttr should fail for non-existent file")
+    }
+}
+
+// TestCreate tests the Create method
+func TestCreate(t *testing.T) {
+    localFS, tempDir, cleanup := setupTestFS(t)
+    defer cleanup()
+    
+    // Test basic file creation
+    path, info, err := localFS.Create(context.Background(), "/", "newfile.txt", fs.FileAttr{}, false)
+    if err != nil {
+        t.Fatalf("Create failed: %v", err)
+    }
+    
+    // Verify path
+    if path != "/newfile.txt" {
+        t.Errorf("Wrong path: got %q, want %q", path, "/newfile.txt")
+    }
+    
+    // Verify it's a regular file
+    if info.Type != fs.FileTypeRegular {
+        t.Errorf("Wrong file type: got %v, want %v", info.Type, fs.FileTypeRegular)
+    }
+    
+    // Verify file exists on disk
+    fullPath := filepath.Join(tempDir, "newfile.txt")
+    if _, err := os.Stat(fullPath); err != nil {
+        t.Errorf("File doesn't exist on disk: %v", err)
+    }
+    
+    // Test exclusive create
+    _, _, err = localFS.Create(context.Background(), "/", "newfile.txt", fs.FileAttr{}, true)
+    if err == nil {
+        t.Error("Exclusive create should fail if file exists")
+    }
+    
+    // Test creating in non-existent directory
+    _, _, err = localFS.Create(context.Background(), "/nonexistent", "file.txt", fs.FileAttr{}, false)
+    if err == nil {
+        t.Error("Create should fail in non-existent directory")
+    }
+}
+
+// TestRemove tests the Remove method
+func TestRemove(t *testing.T) {
+    localFS, tempDir, cleanup := setupTestFS(t)
+    defer cleanup()
+    
+    // Create test file
+    testFile := createTestFile(t, tempDir, "removeme.txt", "test content")
+    relPath := "/" + filepath.Base(testFile)
+    
+    // Test removing the file
+    err := localFS.Remove(context.Background(), relPath)
+    if err != nil {
+        t.Fatalf("Remove failed: %v", err)
+    }
+    
+    // Verify file is removed
+    if _, err := os.Stat(testFile); !os.IsNotExist(err) {
+        t.Error("File still exists after Remove")
+    }
+    
+    // Test removing non-existent file
+    err = localFS.Remove(context.Background(), "/nonexistent.txt")
+    if err == nil {
+        t.Error("Remove should fail for non-existent file")
+    }
+    
+    // Test removing a directory
+    testDir := createTestDir(t, tempDir, "removedir")
+    dirPath := "/" + filepath.Base(testDir)
+    
+    err = localFS.Remove(context.Background(), dirPath)
+    if err == nil {
+        t.Error("Remove should fail for directories")
+    }
+}
+
+// TestRename tests the Rename method
+func TestRename(t *testing.T) {
+    localFS, tempDir, cleanup := setupTestFS(t)
+    defer cleanup()
+    
+    // Create test file
+    testFile := createTestFile(t, tempDir, "source.txt", "test content")
+    sourcePath := "/" + filepath.Base(testFile)
+    targetPath := "/renamed.txt"
+    
+    // Test renaming file
+    err := localFS.Rename(context.Background(), sourcePath, targetPath)
+    if err != nil {
+        t.Fatalf("Rename failed: %v", err)
+    }
+    
+    // Verify source no longer exists
+    if _, err := os.Stat(testFile); !os.IsNotExist(err) {
+        t.Error("Source file still exists after Rename")
+    }
+    
+    // Verify target exists
+    targetFullPath := filepath.Join(tempDir, "renamed.txt")
+    if _, err := os.Stat(targetFullPath); err != nil {
+        t.Errorf("Target file doesn't exist after Rename: %v", err)
+    }
+    
+    // Test renaming non-existent source
+    err = localFS.Rename(context.Background(), "/nonexistent.txt", "/something.txt")
+    if err == nil {
+        t.Error("Rename should fail with non-existent source")
+    }
+    
+    // Test renaming to non-existent parent directory
+    err = localFS.Rename(context.Background(), targetPath, "/nonexistent/file.txt")
+    if err == nil {
+        t.Error("Rename should fail with non-existent target parent directory")
+    }
+}
+
+// TestAccess tests the Access method
+func TestAccess(t *testing.T) {
+    localFS, tempDir, cleanup := setupTestFS(t)
+    defer cleanup()
+    
+    // Create test file with specific permissions
+    testFile := filepath.Join(tempDir, "access-test.txt")
+    err := os.WriteFile(testFile, []byte("test content"), 0640) // rw-r-----
+    if err != nil {
+        t.Fatalf("Failed to create test file: %v", err)
+    }
+    
+    // Get file stat to determine actual owner/group
+    stat, err := os.Stat(testFile)
+    if err != nil {
+        t.Fatalf("Failed to stat test file: %v", err)
+    }
+    
+    sysstat, ok := stat.Sys().(*syscall.Stat_t)
+    if !ok {
+        t.Skip("Unable to get syscall.Stat_t, skipping test")
+    }
+    
+    // Define test credentials
+    ownerCreds := fs.Credentials{
+        UID:    sysstat.Uid,
+        GID:    sysstat.Gid,
+        Groups: []uint32{sysstat.Gid},
+    }
+    
+    nonOwnerCreds := fs.Credentials{
+        UID:    sysstat.Uid + 1,
+        GID:    sysstat.Gid,
+        Groups: []uint32{sysstat.Gid},
+    }
+    
+    // Basic test for owner
+    err = localFS.Access(context.Background(), "/access-test.txt", 4, ownerCreds) // Read
+    if err != nil {
+        t.Errorf("Owner should have read access: %v", err)
+    }
+    
+    // Test for non-owner (should still have read access with mode 0640)
+    err = localFS.Access(context.Background(), "/access-test.txt", 4, nonOwnerCreds) // Read
+    if err != nil {
+        t.Errorf("Group member should have read access: %v", err)
+    }
+    
+    // Test non-existent file
+    err = localFS.Access(context.Background(), "/nonexistent.txt", 4, ownerCreds)
+    if err == nil {
+        t.Error("Access should fail for non-existent file")
     }
 }

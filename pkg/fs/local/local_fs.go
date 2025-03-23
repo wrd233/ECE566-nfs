@@ -328,7 +328,93 @@ func (l *LocalFileSystem) PathToFileHandle(path string) ([]byte, error) {
 
 // SetAttr modifies attributes for the file at the specified path.
 func (l *LocalFileSystem) SetAttr(ctx context.Context, path string, attr fs.FileAttr) (fs.FileInfo, error) {
-    return fs.FileInfo{}, fs.NewError("SetAttr", path, fs.ErrNotSupported)
+    // Resolve and validate path
+    fullPath, err := l.resolvePath(path)
+    if err != nil {
+        return fs.FileInfo{}, fs.NewError("SetAttr", path, err)
+    }
+    
+    // Get current file info
+    fileInfo, err := os.Stat(fullPath)
+    if err != nil {
+        return fs.FileInfo{}, fs.NewError("SetAttr", path, mapOSError(err))
+    }
+    
+    // Apply attribute changes
+    
+    // Change mode if specified
+    if attr.Mode != nil {
+        err = os.Chmod(fullPath, os.FileMode(*attr.Mode))
+        if err != nil {
+            return fs.FileInfo{}, fs.NewError("SetAttr", path, mapOSError(err))
+        }
+    }
+    
+    // Change ownership if specified
+    if attr.Uid != nil || attr.Gid != nil {
+        // Get current ownership if only one is specified
+        stat, ok := fileInfo.Sys().(*syscall.Stat_t)
+        if !ok {
+            return fs.FileInfo{}, fs.NewError("SetAttr", path, fmt.Errorf("unable to get file system info"))
+        }
+        
+        uid := int(stat.Uid)
+        gid := int(stat.Gid)
+        
+        if attr.Uid != nil {
+            uid = int(*attr.Uid)
+        }
+        
+        if attr.Gid != nil {
+            gid = int(*attr.Gid)
+        }
+        
+        err = os.Chown(fullPath, uid, gid)
+        if err != nil {
+            return fs.FileInfo{}, fs.NewError("SetAttr", path, mapOSError(err))
+        }
+    }
+    
+    // Change size if specified (truncate file)
+    if attr.Size != nil {
+        err = os.Truncate(fullPath, *attr.Size)
+        if err != nil {
+            return fs.FileInfo{}, fs.NewError("SetAttr", path, mapOSError(err))
+        }
+    }
+    
+    // Change access/modification times if specified
+    if attr.AccessTime != nil || attr.ModifyTime != nil {
+        atime := fileInfo.ModTime() // Use current by default
+        mtime := fileInfo.ModTime()
+        
+        if attr.AccessTime != nil {
+            atime = *attr.AccessTime
+        }
+        
+        if attr.ModifyTime != nil {
+            mtime = *attr.ModifyTime
+        }
+        
+        err = os.Chtimes(fullPath, atime, mtime)
+        if err != nil {
+            return fs.FileInfo{}, fs.NewError("SetAttr", path, mapOSError(err))
+        }
+    }
+    
+    // Get updated file info
+    newFileInfo, err := os.Stat(fullPath)
+    if err != nil {
+        return fs.FileInfo{}, fs.NewError("SetAttr", path, mapOSError(err))
+    }
+    
+    // Convert to fs.FileInfo
+    fsInfo, err := l.convertFileInfo(path, newFileInfo)
+    if err != nil {
+        return fs.FileInfo{}, fs.NewError("SetAttr", path, err)
+    }
+    
+    return fsInfo, nil
 }
 
 // Lookup finds a file by name within a directory.
@@ -481,17 +567,157 @@ func (l *LocalFileSystem) Write(ctx context.Context, path string, offset int64, 
 
 // Access checks if the given credentials can access the file with the requested permission.
 func (l *LocalFileSystem) Access(ctx context.Context, path string, mode fs.FileMode, creds fs.Credentials) error {
-    return fs.NewError("Access", path, fs.ErrNotSupported)
+    // Resolve and validate path
+    fullPath, err := l.resolvePath(path)
+    if err != nil {
+        return fs.NewError("Access", path, err)
+    }
+    
+    // Check if path exists
+    fileInfo, err := os.Stat(fullPath)
+    if err != nil {
+        return fs.NewError("Access", path, mapOSError(err))
+    }
+    
+    // Get system-specific information
+    stat, ok := fileInfo.Sys().(*syscall.Stat_t)
+    if !ok {
+        return fs.NewError("Access", path, fmt.Errorf("unable to get system information"))
+    }
+    
+    // Convert file mode to a permission mask
+    requiredPerm := mode & 7 // Keep only the rwx bits
+    
+    // Check if user is owner, in group, or other
+    var checkPerm fs.FileMode
+    fileMode := fs.FileMode(fileInfo.Mode() & 0777) // Get permission bits
+    
+    if stat.Uid == creds.UID {
+        // User is owner, check owner permission bits
+        checkPerm = (fileMode >> 6) & 7
+    } else if stat.Gid == creds.GID || containsGroup(creds.Groups, stat.Gid) {
+        // User is in group, check group permission bits
+        checkPerm = (fileMode >> 3) & 7
+    } else {
+        // User is other, check other permission bits
+        checkPerm = fileMode & 7
+    }
+    
+    // Check if required permissions are granted
+    if (requiredPerm & checkPerm) != requiredPerm {
+        return fs.NewError("Access", path, fs.ErrPermission)
+    }
+    
+    return nil
+}
+
+// Helper function to check if a GID is in a list of groups
+func containsGroup(groups []uint32, gid uint32) bool {
+    for _, g := range groups {
+        if g == gid {
+            return true
+        }
+    }
+    return false
 }
 
 // Create creates a new file in the specified directory.
 func (l *LocalFileSystem) Create(ctx context.Context, dir string, name string, attr fs.FileAttr, excl bool) (string, fs.FileInfo, error) {
-    return "", fs.FileInfo{}, fs.NewError("Create", filepath.Join(dir, name), fs.ErrNotSupported)
+    // Resolve parent directory path
+    parentPath, err := l.resolvePath(dir)
+    if err != nil {
+        return "", fs.FileInfo{}, fs.NewError("Create", dir, err)
+    }
+    
+    // Check if parent is a directory
+    parentInfo, err := os.Stat(parentPath)
+    if err != nil {
+        return "", fs.FileInfo{}, fs.NewError("Create", dir, mapOSError(err))
+    }
+    
+    if !parentInfo.IsDir() {
+        return "", fs.FileInfo{}, fs.NewError("Create", dir, fs.ErrNotDir)
+    }
+    
+    // Create full path for new file
+    newFilePath := filepath.Join(parentPath, name)
+    
+    // Check for exclusive create
+    if excl {
+        _, err := os.Stat(newFilePath)
+        if err == nil {
+            // File already exists
+            return "", fs.FileInfo{}, fs.NewError("Create", filepath.Join(dir, name), fs.ErrExist)
+        } else if !os.IsNotExist(err) {
+            // Some other error occurred
+            return "", fs.FileInfo{}, fs.NewError("Create", filepath.Join(dir, name), mapOSError(err))
+        }
+    }
+    
+    // Determine permissions (use default if not specified)
+    perm := os.FileMode(0644) // Default permission
+    if attr.Mode != nil {
+        perm = os.FileMode(*attr.Mode)
+    }
+    
+    // Create the file
+    file, err := os.OpenFile(newFilePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, perm)
+    if err != nil {
+        return "", fs.FileInfo{}, fs.NewError("Create", filepath.Join(dir, name), mapOSError(err))
+    }
+    defer file.Close()
+    
+    // Apply other attributes if specified
+    if attr.Size != nil || attr.Uid != nil || attr.Gid != nil || attr.AccessTime != nil || attr.ModifyTime != nil {
+        newPath := filepath.Join(dir, name)
+        _, err = l.SetAttr(ctx, newPath, attr)
+        if err != nil {
+            return "", fs.FileInfo{}, fs.NewError("Create", newPath, err)
+        }
+    }
+    
+    // Get information about the new file
+    newFileInfo, err := os.Stat(newFilePath)
+    if err != nil {
+        return "", fs.FileInfo{}, fs.NewError("Create", filepath.Join(dir, name), mapOSError(err))
+    }
+    
+    // Convert to fs.FileInfo
+    newFileRelPath := filepath.Join(dir, name)
+    fsInfo, err := l.convertFileInfo(newFileRelPath, newFileInfo)
+    if err != nil {
+        return "", fs.FileInfo{}, fs.NewError("Create", newFileRelPath, err)
+    }
+    
+    return newFileRelPath, fsInfo, nil
 }
 
 // Remove removes the specified file.
 func (l *LocalFileSystem) Remove(ctx context.Context, path string) error {
-    return fs.NewError("Remove", path, fs.ErrNotSupported)
+    // Resolve and validate path
+    fullPath, err := l.resolvePath(path)
+    if err != nil {
+        return fs.NewError("Remove", path, err)
+    }
+    
+    // Check if path exists
+    fileInfo, err := os.Stat(fullPath)
+    if err != nil {
+        return fs.NewError("Remove", path, mapOSError(err))
+    }
+    
+    // Check if it's a directory (use Rmdir for directories)
+    if fileInfo.IsDir() {
+        return fs.NewError("Remove", path, fs.ErrIsDir)
+    }
+    
+    // Remove the file
+    err = os.Remove(fullPath)
+    if err != nil {
+        return fs.NewError("Remove", path, mapOSError(err))
+    }
+    
+    return nil
 }
 
 // ReadDir reads the contents of a directory.
@@ -662,7 +888,41 @@ func (l *LocalFileSystem) ReadDirPlus(ctx context.Context, dir string, cookie in
 
 // Rename renames a file or directory.
 func (l *LocalFileSystem) Rename(ctx context.Context, oldPath string, newPath string) error {
-    return fs.NewError("Rename", oldPath, fs.ErrNotSupported)
+    // Resolve and validate both paths
+    oldFullPath, err := l.resolvePath(oldPath)
+    if err != nil {
+        return fs.NewError("Rename", oldPath, err)
+    }
+    
+    newFullPath, err := l.resolvePath(newPath)
+    if err != nil {
+        return fs.NewError("Rename", newPath, err)
+    }
+    
+    // Check if source exists
+    _, err = os.Stat(oldFullPath)
+    if err != nil {
+        return fs.NewError("Rename", oldPath, mapOSError(err))
+    }
+    
+    // Check if destination parent directory exists
+    newParent := filepath.Dir(newFullPath)
+    parentInfo, err := os.Stat(newParent)
+    if err != nil {
+        return fs.NewError("Rename", newPath, mapOSError(err))
+    }
+    
+    if !parentInfo.IsDir() {
+        return fs.NewError("Rename", newPath, fs.ErrNotDir)
+    }
+    
+    // Perform the rename operation
+    err = os.Rename(oldFullPath, newFullPath)
+    if err != nil {
+        return fs.NewError("Rename", oldPath+" to "+newPath, mapOSError(err))
+    }
+    
+    return nil
 }
 
 // Symlink creates a symbolic link.

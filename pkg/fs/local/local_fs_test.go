@@ -615,3 +615,184 @@ func TestWrite(t *testing.T) {
         t.Errorf("Sync write failed: %v", err)
     }
 }
+
+
+// TestReadDir tests the ReadDir method
+func TestReadDir(t *testing.T) {
+    localFS, tempDir, cleanup := setupTestFS(t)
+    defer cleanup()
+    
+    // Create test directory structure
+    testDir := createTestDir(t, tempDir, "readdir-test")
+    _ = createTestDir(t, testDir, "subdir")
+    _ = createTestFile(t, testDir, "file1.txt", "content1")
+    _ = createTestFile(t, testDir, "file2.txt", "content2")
+    
+    // Test reading directory
+    dirPath := "/readdir-test"
+    entries, _, err := localFS.ReadDir(context.Background(), dirPath, 0, 0)
+    if err != nil {
+        t.Fatalf("ReadDir failed: %v", err)
+    }
+    
+    // Verify number of entries
+    if len(entries) != 3 { // subdir, file1.txt, file2.txt
+        t.Errorf("Wrong number of entries: got %d, want 3", len(entries))
+    }
+    
+    // Verify entry names (don't assume any particular order)
+    names := make(map[string]bool)
+    for _, entry := range entries {
+        names[entry.Name] = true
+    }
+    
+    if !names["subdir"] {
+        t.Error("Missing directory entry 'subdir'")
+    }
+    if !names["file1.txt"] {
+        t.Error("Missing file entry 'file1.txt'")
+    }
+    if !names["file2.txt"] {
+        t.Error("Missing file entry 'file2.txt'")
+    }
+    
+    // Test pagination using cookie
+    if len(entries) > 0 {
+        firstCookie := entries[0].Cookie
+        
+        // Read using the cookie
+        entriesAfterCookie, _, err := localFS.ReadDir(context.Background(), dirPath, firstCookie, 0)
+        if err != nil {
+            t.Fatalf("ReadDir with cookie failed: %v", err)
+        }
+        
+        // Should have one fewer entry
+        if len(entriesAfterCookie) != len(entries) - 1 {
+            t.Errorf("Wrong number of entries after cookie: got %d, want %d", 
+                len(entriesAfterCookie), len(entries) - 1)
+        }
+    }
+    
+    // Test reading non-existent directory
+    _, _, err = localFS.ReadDir(context.Background(), "/nonexistent", 0, 0)
+    if err == nil {
+        t.Error("ReadDir should fail for non-existent directory")
+    }
+    
+    // Test reading a file (not a directory)
+    _, _, err = localFS.ReadDir(context.Background(), "/readdir-test/file1.txt", 0, 0)
+    if err == nil || !errors.Is(err, fs.ErrNotDir) {
+        t.Errorf("ReadDir should fail with NotDir error for file, got: %v", err)
+    }
+}
+
+// TestMkdir tests the Mkdir method
+func TestMkdir(t *testing.T) {
+    localFS, tempDir, cleanup := setupTestFS(t)
+    defer cleanup()
+    
+    // Test creating a basic directory
+    dirPath, dirInfo, err := localFS.Mkdir(context.Background(), "/", "testdir", fs.FileAttr{})
+    if err != nil {
+        t.Fatalf("Mkdir failed: %v", err)
+    }
+    
+    // Verify path
+    if dirPath != "/testdir" {
+        t.Errorf("Wrong directory path: got %q, want %q", dirPath, "/testdir")
+    }
+    
+    // Verify it's a directory
+    if dirInfo.Type != fs.FileTypeDirectory {
+        t.Errorf("Wrong file type: got %v, want %v", dirInfo.Type, fs.FileTypeDirectory)
+    }
+    
+    // Verify it exists on disk
+    fullPath, err := localFS.resolvePath(dirPath)
+    if err != nil {
+        t.Fatalf("Failed to resolve path: %v", err)
+    }
+    
+    fi, err := os.Stat(fullPath)
+    if err != nil {
+        t.Fatalf("Directory not found on disk: %v", err)
+    }
+    
+    if !fi.IsDir() {
+        t.Error("Created path is not a directory")
+    }
+    
+    // Test creating directory with specific permissions
+    mode := fs.FileMode(0700)
+    _, customDirInfo, err := localFS.Mkdir(context.Background(), "/", "customdir", fs.FileAttr{
+        Mode: &mode,
+    })
+    if err != nil {
+        t.Fatalf("Mkdir with custom mode failed: %v", err)
+    }
+    
+    // Verify permissions (might not be exact on all platforms)
+    if customDirInfo.Mode&0777 != mode {
+        t.Errorf("Wrong permissions: got %o, want %o", customDirInfo.Mode&0777, mode)
+    }
+    
+    // Test creating already existing directory
+    _, _, err = localFS.Mkdir(context.Background(), "/", "testdir", fs.FileAttr{})
+    if err == nil {
+        t.Error("Mkdir should fail when directory already exists")
+    }
+    
+    // Test creating directory in non-existent parent
+    _, _, err = localFS.Mkdir(context.Background(), "/nonexistent", "child", fs.FileAttr{})
+    if err == nil {
+        t.Error("Mkdir should fail with non-existent parent directory")
+    }
+    
+    // Test creating directory with file as parent
+    createTestFile(t, tempDir, "testfile.txt", "content")
+    _, _, err = localFS.Mkdir(context.Background(), "/testfile.txt", "child", fs.FileAttr{})
+    if err == nil || !errors.Is(err, fs.ErrNotDir) {
+        t.Errorf("Mkdir should fail with NotDir error when parent is a file, got: %v", err)
+    }
+}
+
+// TestRmdir tests the Rmdir method
+func TestRmdir(t *testing.T) {
+    localFS, tempDir, cleanup := setupTestFS(t)
+    defer cleanup()
+    
+    // Create test directories
+    emptyDir := createTestDir(t, tempDir, "empty-dir")
+    nonEmptyDir := createTestDir(t, tempDir, "non-empty-dir")
+    createTestFile(t, nonEmptyDir, "file.txt", "content")
+    
+    // Test removing empty directory
+    err := localFS.Rmdir(context.Background(), "/empty-dir")
+    if err != nil {
+        t.Fatalf("Rmdir failed for empty directory: %v", err)
+    }
+    
+    // Verify directory is removed
+    if _, err := os.Stat(emptyDir); !os.IsNotExist(err) {
+        t.Error("Directory still exists after Rmdir")
+    }
+    
+    // Test removing non-empty directory
+    err = localFS.Rmdir(context.Background(), "/non-empty-dir")
+    if err == nil || !errors.Is(err, fs.ErrNotEmpty) {
+        t.Errorf("Rmdir should fail with NotEmpty error for non-empty directory, got: %v", err)
+    }
+    
+    // Test removing non-existent directory
+    err = localFS.Rmdir(context.Background(), "/nonexistent")
+    if err == nil {
+        t.Error("Rmdir should fail for non-existent directory")
+    }
+    
+    // Test removing a file (not a directory)
+    createTestFile(t, tempDir, "testfile.txt", "content")
+    err = localFS.Rmdir(context.Background(), "/testfile.txt")
+    if err == nil || !errors.Is(err, fs.ErrNotDir) {
+        t.Errorf("Rmdir should fail with NotDir error for file, got: %v", err)
+    }
+}

@@ -494,19 +494,165 @@ func (l *LocalFileSystem) Remove(ctx context.Context, path string) error {
     return fs.NewError("Remove", path, fs.ErrNotSupported)
 }
 
+// ReadDir reads the contents of a directory.
+func (l *LocalFileSystem) ReadDir(ctx context.Context, dir string, cookie int64, count int) ([]fs.DirEntry, int64, error) {
+    // Resolve and validate path
+    fullPath, err := l.resolvePath(dir)
+    if err != nil {
+        return nil, 0, fs.NewError("ReadDir", dir, err)
+    }
+    
+    // Check if path is a directory
+    fileInfo, err := os.Stat(fullPath)
+    if err != nil {
+        return nil, 0, fs.NewError("ReadDir", dir, mapOSError(err))
+    }
+    
+    if !fileInfo.IsDir() {
+        return nil, 0, fs.NewError("ReadDir", dir, fs.ErrNotDir)
+    }
+    
+    // Read all directory entries
+    entries, err := os.ReadDir(fullPath)
+    if err != nil {
+        return nil, 0, fs.NewError("ReadDir", dir, mapOSError(err))
+    }
+    
+    // Skip entries before cookie
+    if cookie > 0 && cookie < int64(len(entries)) {
+        entries = entries[cookie:]
+    } else if cookie > 0 {
+        // If cookie is beyond the end, return empty result
+        return []fs.DirEntry{}, int64(len(entries)), nil
+    }
+    
+    // Limit number of entries if count is specified
+    if count > 0 && count < len(entries) {
+        entries = entries[:count]
+    }
+    
+    // Convert to fs.DirEntry format
+    result := make([]fs.DirEntry, len(entries))
+    for i, entry := range entries {
+        // Generate a unique file ID (using inode number if possible)
+        var fileId uint64
+        info, err := entry.Info()
+        if err == nil {
+            if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+                fileId = stat.Ino
+            }
+        }
+        
+        // If we couldn't get inode, use a simple hash of the name
+        if fileId == 0 {
+            h := uint64(0)
+            for _, c := range entry.Name() {
+                h = h*31 + uint64(c)
+            }
+            fileId = h
+        }
+        
+        // Set the cookie for this entry (simple index-based approach)
+        nextCookie := cookie + int64(i) + 1
+        
+        result[i] = fs.DirEntry{
+            Name:       entry.Name(),
+            FileId:     fileId,
+            Cookie:     nextCookie,
+            Attributes: nil, // No attributes in basic ReadDir
+        }
+    }
+    
+    // Return the next cookie value
+    nextCookie := cookie + int64(len(result))
+    
+    return result, nextCookie, nil
+}
+
 // Mkdir creates a new directory.
 func (l *LocalFileSystem) Mkdir(ctx context.Context, dir string, name string, attr fs.FileAttr) (string, fs.FileInfo, error) {
-    return "", fs.FileInfo{}, fs.NewError("Mkdir", filepath.Join(dir, name), fs.ErrNotSupported)
+    // Resolve parent directory path
+    parentPath, err := l.resolvePath(dir)
+    if err != nil {
+        return "", fs.FileInfo{}, fs.NewError("Mkdir", dir, err)
+    }
+    
+    // Check if parent is a directory
+    parentInfo, err := os.Stat(parentPath)
+    if err != nil {
+        return "", fs.FileInfo{}, fs.NewError("Mkdir", dir, mapOSError(err))
+    }
+    
+    if !parentInfo.IsDir() {
+        return "", fs.FileInfo{}, fs.NewError("Mkdir", dir, fs.ErrNotDir)
+    }
+    
+    // Create full path for new directory
+    newDirPath := filepath.Join(parentPath, name)
+    
+    // Determine permissions (use default if not specified)
+    perm := os.FileMode(0755) // Default permission
+    if attr.Mode != nil {
+        perm = os.FileMode(*attr.Mode)
+    }
+    
+    // Create the directory
+    err = os.Mkdir(newDirPath, perm)
+    if err != nil {
+        return "", fs.FileInfo{}, fs.NewError("Mkdir", filepath.Join(dir, name), mapOSError(err))
+    }
+    
+    // Get information about the new directory
+    newDirInfo, err := os.Stat(newDirPath)
+    if err != nil {
+        return "", fs.FileInfo{}, fs.NewError("Mkdir", filepath.Join(dir, name), mapOSError(err))
+    }
+    
+    // Convert to fs.FileInfo
+    newDirRelPath := filepath.Join(dir, name)
+    fsInfo, err := l.convertFileInfo(newDirRelPath, newDirInfo)
+    if err != nil {
+        return "", fs.FileInfo{}, fs.NewError("Mkdir", newDirRelPath, err)
+    }
+    
+    return newDirRelPath, fsInfo, nil
 }
 
 // Rmdir removes the specified directory.
 func (l *LocalFileSystem) Rmdir(ctx context.Context, path string) error {
-    return fs.NewError("Rmdir", path, fs.ErrNotSupported)
-}
-
-// ReadDir reads the contents of a directory.
-func (l *LocalFileSystem) ReadDir(ctx context.Context, dir string, cookie int64, count int) ([]fs.DirEntry, int64, error) {
-    return nil, 0, fs.NewError("ReadDir", dir, fs.ErrNotSupported)
+    // Resolve and validate path
+    fullPath, err := l.resolvePath(path)
+    if err != nil {
+        return fs.NewError("Rmdir", path, err)
+    }
+    
+    // Check if path exists and is a directory
+    fileInfo, err := os.Stat(fullPath)
+    if err != nil {
+        return fs.NewError("Rmdir", path, mapOSError(err))
+    }
+    
+    if !fileInfo.IsDir() {
+        return fs.NewError("Rmdir", path, fs.ErrNotDir)
+    }
+    
+    // Check if directory is empty
+    entries, err := os.ReadDir(fullPath)
+    if err != nil {
+        return fs.NewError("Rmdir", path, mapOSError(err))
+    }
+    
+    if len(entries) > 0 {
+        return fs.NewError("Rmdir", path, fs.ErrNotEmpty)
+    }
+    
+    // Remove the directory
+    err = os.Remove(fullPath)
+    if err != nil {
+        return fs.NewError("Rmdir", path, mapOSError(err))
+    }
+    
+    return nil
 }
 
 // ReadDirPlus is like ReadDir, but also returns file attributes for each entry.

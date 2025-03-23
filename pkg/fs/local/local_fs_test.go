@@ -3,10 +3,11 @@ package local
 
 import (
     "context"
+    "errors"
     "os"
     "path/filepath"
     "testing"
-
+    
     "github.com/example/nfsserver/pkg/fs"
 )
 
@@ -250,5 +251,159 @@ func TestLocalFileSystem_FileHandles(t *testing.T) {
     _, err := localFS.FileHandleToPath([]byte("invalid-handle"))
     if err == nil {
         t.Error("FileHandleToPath should fail with invalid handle")
+    }
+}
+
+
+// TestGetAttr tests the GetAttr method
+func TestGetAttr(t *testing.T) {
+    localFS, tempDir, cleanup := setupTestFS(t)
+    defer cleanup()
+    
+    // Create test file
+    testFile := createTestFile(t, tempDir, "test.txt", "test content")
+    relPath := "/" + filepath.Base(testFile)
+    
+    // Get attributes
+    info, err := localFS.GetAttr(context.Background(), relPath)
+    if err != nil {
+        t.Fatalf("GetAttr failed: %v", err)
+    }
+    
+    // Verify file type
+    if info.Type != fs.FileTypeRegular {
+        t.Errorf("Wrong file type: got %v, want %v", info.Type, fs.FileTypeRegular)
+    }
+    
+    // Verify size
+    expectedSize := int64(len("test content"))
+    if info.Size != expectedSize {
+        t.Errorf("Wrong file size: got %d, want %d", info.Size, expectedSize)
+    }
+    
+    // Create test directory
+    testDir := createTestDir(t, tempDir, "testdir")
+    relDirPath := "/" + filepath.Base(testDir)
+    
+    // Get attributes for directory
+    dirInfo, err := localFS.GetAttr(context.Background(), relDirPath)
+    if err != nil {
+        t.Fatalf("GetAttr failed for directory: %v", err)
+    }
+    
+    // Verify directory type
+    if dirInfo.Type != fs.FileTypeDirectory {
+        t.Errorf("Wrong file type for directory: got %v, want %v", 
+            dirInfo.Type, fs.FileTypeDirectory)
+    }
+    
+    // Test non-existent file
+    _, err = localFS.GetAttr(context.Background(), "/nonexistent")
+    if err == nil {
+        t.Error("GetAttr should fail for non-existent file")
+    } else if !errors.Is(err, fs.ErrNotExist) {
+        t.Errorf("Wrong error type: got %v, want %v", err, fs.ErrNotExist)
+    }
+}
+
+// TestConvertFileInfo tests the convertFileInfo method
+func TestConvertFileInfo(t *testing.T) {
+    localFS, tempDir, cleanup := setupTestFS(t)
+    defer cleanup()
+    
+    // Create test file
+    testFile := createTestFile(t, tempDir, "convert.txt", "content for conversion")
+    relPath := "/" + filepath.Base(testFile)
+    
+    // Get os.FileInfo
+    fullPath := filepath.Join(tempDir, filepath.Base(testFile))
+    osInfo, err := os.Stat(fullPath)
+    if err != nil {
+        t.Fatalf("Failed to stat test file: %v", err)
+    }
+    
+    // Convert to fs.FileInfo
+    fsInfo, err := localFS.convertFileInfo(relPath, osInfo)
+    if err != nil {
+        t.Fatalf("convertFileInfo failed: %v", err)
+    }
+    
+    // Verify basic properties
+    if fsInfo.Size != osInfo.Size() {
+        t.Errorf("Size mismatch: got %d, want %d", fsInfo.Size, osInfo.Size())
+    }
+    
+    if !fsInfo.ModifyTime.Equal(osInfo.ModTime()) {
+        t.Errorf("ModTime mismatch: got %v, want %v", fsInfo.ModifyTime, osInfo.ModTime())
+    }
+    
+    // Verify type
+    if fsInfo.Type != fs.FileTypeRegular {
+        t.Errorf("Type mismatch: got %v, want %v", fsInfo.Type, fs.FileTypeRegular)
+    }
+    
+    // Create directory and test conversion
+    testDir := createTestDir(t, tempDir, "convertdir")
+    relDirPath := "/" + filepath.Base(testDir)
+    
+    // Get os.FileInfo for directory
+    osDirInfo, err := os.Stat(testDir)
+    if err != nil {
+        t.Fatalf("Failed to stat test directory: %v", err)
+    }
+    
+    // Convert directory info
+    fsDirInfo, err := localFS.convertFileInfo(relDirPath, osDirInfo)
+    if err != nil {
+        t.Fatalf("convertFileInfo failed for directory: %v", err)
+    }
+    
+    // Verify directory type
+    if fsDirInfo.Type != fs.FileTypeDirectory {
+        t.Errorf("Type mismatch for directory: got %v, want %v", 
+            fsDirInfo.Type, fs.FileTypeDirectory)
+    }
+}
+
+// TestResolvePath tests the path resolution and security
+func TestResolvePath(t *testing.T) {
+    localFS, tempDir, cleanup := setupTestFS(t)
+    defer cleanup()
+    
+    // Test normal path
+    path := "/normal/path"
+    expected := filepath.Join(tempDir, "normal", "path")
+    result, err := localFS.resolvePath(path)
+    if err != nil {
+        t.Errorf("resolvePath failed for normal path: %v", err)
+    } else if result != expected {
+        t.Errorf("resolvePath result mismatch: got %q, want %q", result, expected)
+    }
+    
+    // Test path with leading slash
+    path = "no/leading/slash"
+    expected = filepath.Join(tempDir, "no", "leading", "slash")
+    result, err = localFS.resolvePath(path)
+    if err != nil {
+        t.Errorf("resolvePath failed for path without leading slash: %v", err)
+    } else if result != expected {
+        t.Errorf("resolvePath result mismatch: got %q, want %q", result, expected)
+    }
+    
+    // Test directory traversal attempt
+    path = "/../../../etc/passwd"
+    _, err = localFS.resolvePath(path)
+    if err == nil {
+        t.Error("resolvePath should reject directory traversal attempts")
+    }
+    
+    // Test path with dot segments
+    path = "/a/./b/../c"
+    expected = filepath.Join(tempDir, "a", "c")
+    result, err = localFS.resolvePath(path)
+    if err != nil {
+        t.Errorf("resolvePath failed for path with dot segments: %v", err)
+    } else if result != expected {
+        t.Errorf("resolvePath result mismatch: got %q, want %q", result, expected)
     }
 }

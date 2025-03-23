@@ -6,6 +6,7 @@ import (
     "fmt"
     "os"
     "path/filepath"
+    "strings"
     "sync"
     "syscall"
 
@@ -22,8 +23,7 @@ type LocalFileSystem struct {
     fsID uint32
     
     // inodeMap maintains a mapping from inode numbers to paths
-    // This is needed because the OS doesn't provide a way to get a path from an inode
-    inodeMap     sync.Map // map[uint64]string
+    inodeMap sync.Map // map[uint64]string
     
     // generationMap tracks the generation number for each inode
     generationMap sync.Map // map[uint64]uint32
@@ -48,7 +48,6 @@ func NewLocalFileSystem(rootPath string) (*LocalFileSystem, error) {
     }
     
     // Generate a filesystem ID based on the root path
-    // We'll use a simple hash of the path for demonstration
     fsID := generateFsID(absPath)
     
     return &LocalFileSystem{
@@ -67,16 +66,35 @@ func generateFsID(path string) uint32 {
 }
 
 // resolvePath converts a path relative to the filesystem to an absolute OS path
-func (l *LocalFileSystem) resolvePath(path string) string {
+// with security checks to prevent directory traversal
+func (l *LocalFileSystem) resolvePath(path string) (string, error) {
+    // Remove leading slash if present for consistency
+    path = strings.TrimPrefix(path, "/")
+    
+    // Clean the path to remove any '..' components
     cleanPath := filepath.Clean(path)
-    return filepath.Join(l.rootPath, cleanPath)
+    
+    // Join with the root path
+    fullPath := filepath.Join(l.rootPath, cleanPath)
+    
+    // Verify the path is still under the root path (prevent directory traversal)
+    if !strings.HasPrefix(fullPath, l.rootPath) {
+        return "", fs.ErrInvalidName
+    }
+    
+    return fullPath, nil
 }
 
 // getInode retrieves the inode number for a file
 func (l *LocalFileSystem) getInode(path string) (uint64, error) {
-    info, err := os.Stat(l.resolvePath(path))
+    fullPath, err := l.resolvePath(path)
     if err != nil {
         return 0, err
+    }
+    
+    info, err := os.Stat(fullPath)
+    if err != nil {
+        return 0, mapOSError(err)
     }
     
     stat, ok := info.Sys().(*syscall.Stat_t)
@@ -111,6 +129,150 @@ func (l *LocalFileSystem) lookupPathByInode(inode uint64) (string, bool) {
     return "", false
 }
 
+// openFile safely opens a file with proper error mapping
+func (l *LocalFileSystem) openFile(path string, flag int, perm os.FileMode) (*os.File, error) {
+    fullPath, err := l.resolvePath(path)
+    if err != nil {
+        return nil, fs.NewError("open", path, err)
+    }
+    
+    file, err := os.OpenFile(fullPath, flag, perm)
+    if err != nil {
+        return nil, fs.NewError("open", path, mapOSError(err))
+    }
+    
+    return file, nil
+}
+
+// getFileInfo gets the os.FileInfo for a path
+func (l *LocalFileSystem) getFileInfo(path string) (os.FileInfo, error) {
+    fullPath, err := l.resolvePath(path)
+    if err != nil {
+        return nil, err
+    }
+    
+    info, err := os.Stat(fullPath)
+    if err != nil {
+        return nil, mapOSError(err)
+    }
+    
+    return info, nil
+}
+
+// convertFileInfo converts os.FileInfo to fs.FileInfo
+func (l *LocalFileSystem) convertFileInfo(path string, osInfo os.FileInfo) (fs.FileInfo, error) {
+    if osInfo == nil {
+        return fs.FileInfo{}, fmt.Errorf("nil FileInfo")
+    }
+    
+    // Get system-specific info
+    stat, ok := osInfo.Sys().(*syscall.Stat_t)
+    if !ok {
+        return fs.FileInfo{}, fmt.Errorf("unable to get system information")
+    }
+    
+    // Determine file type
+    fileType := fs.FileTypeRegular
+    mode := osInfo.Mode()
+    
+    if mode.IsDir() {
+        fileType = fs.FileTypeDirectory
+    } else if mode&os.ModeSymlink != 0 {
+        fileType = fs.FileTypeSymlink
+    } else if mode&os.ModeDevice != 0 {
+        if mode&os.ModeCharDevice != 0 {
+            fileType = fs.FileTypeChar
+        } else {
+            fileType = fs.FileTypeBlock
+        }
+    } else if mode&os.ModeNamedPipe != 0 {
+        fileType = fs.FileTypeFIFO
+    } else if mode&os.ModeSocket != 0 {
+        fileType = fs.FileTypeSocket
+    }
+    
+    // Convert permission bits
+    fsMode := fs.FileMode(mode.Perm())
+    
+    // Handle special bits (simplified)
+    if mode&os.ModeSetuid != 0 {
+        fsMode |= fs.ModeSetUID
+    }
+    if mode&os.ModeSetgid != 0 {
+        fsMode |= fs.ModeSetGID
+    }
+    if mode&os.ModeSticky != 0 {
+        fsMode |= fs.ModeSticky
+    }
+    
+    // Use ModTime for all time fields for simplicity and cross-platform compatibility
+    modTime := osInfo.ModTime()
+    
+    // Create FileInfo
+    fsInfo := fs.FileInfo{
+        Type:       fileType,
+        Mode:       fsMode,
+        Size:       osInfo.Size(),
+        Uid:        stat.Uid,
+        Gid:        stat.Gid,
+        Nlink:      uint32(stat.Nlink),
+        Rdev:       uint64(stat.Rdev),
+        BlockSize:  uint32(512), // Default block size
+        Blocks:     uint64((osInfo.Size() + 511) / 512), // Approximate blocks from size
+        ModifyTime: modTime,
+        AccessTime: modTime, // Use ModTime as a fallback
+        ChangeTime: modTime, // Use ModTime as a fallback
+    }
+    
+    // Update the inode map
+    l.updateInodeMap(path, stat.Ino)
+    
+    return fsInfo, nil
+}
+
+// mapOSError maps os errors to fs errors
+func mapOSError(err error) error {
+    if os.IsNotExist(err) {
+        return fs.ErrNotExist
+    } else if os.IsPermission(err) {
+        return fs.ErrPermission
+    } else if os.IsExist(err) {
+        return fs.ErrExist
+    }
+    
+    // Handle more specific errors
+    if pathErr, ok := err.(*os.PathError); ok {
+        switch pathErr.Err {
+        case syscall.ENOTEMPTY:
+            return fs.ErrNotEmpty
+        case syscall.EINVAL:
+            return fs.ErrInvalidName
+        case syscall.ENOSPC:
+            return fs.ErrNoSpace
+        }
+    }
+    
+    // Default to IO error
+    return fs.ErrIO
+}
+
+// GetAttr retrieves attributes for the file at the specified path.
+func (l *LocalFileSystem) GetAttr(ctx context.Context, path string) (fs.FileInfo, error) {
+    // Get file info
+    osInfo, err := l.getFileInfo(path)
+    if err != nil {
+        return fs.FileInfo{}, fs.NewError("GetAttr", path, err)
+    }
+    
+    // Convert to fs.FileInfo
+    info, err := l.convertFileInfo(path, osInfo)
+    if err != nil {
+        return fs.FileInfo{}, fs.NewError("GetAttr", path, err)
+    }
+    
+    return info, nil
+}
+
 // FileHandleToPath converts a file handle to a file system path.
 func (l *LocalFileSystem) FileHandleToPath(fh []byte) (string, error) {
     handle, err := fs.DeserializeFileHandle(fh)
@@ -129,8 +291,12 @@ func (l *LocalFileSystem) FileHandleToPath(fh []byte) (string, error) {
         return "", fs.NewError("FileHandleToPath", "", fs.ErrStale)
     }
     
-    // In a real implementation, we would verify the generation number
-    // but for simplicity we'll skip that check
+    // Verify the generation number
+    if gen, ok := l.generationMap.Load(handle.Inode); ok {
+        if gen.(uint32) != handle.Generation {
+            return "", fs.NewError("FileHandleToPath", "", fs.ErrStale)
+        }
+    }
     
     return path, nil
 }
@@ -157,17 +323,6 @@ func (l *LocalFileSystem) PathToFileHandle(path string) ([]byte, error) {
     }
     
     return handle.Serialize(), nil
-}
-
-// GetAttr retrieves attributes for the file at the specified path.
-func (l *LocalFileSystem) GetAttr(ctx context.Context, path string) (fs.FileInfo, error) {
-    // This is a stub implementation - in a real implementation, this would:
-    // 1. Resolve the path to an absolute path
-    // 2. Use os.Stat to get file info
-    // 3. Convert os.FileInfo to fs.FileInfo
-    // 4. Return the result
-    
-    return fs.FileInfo{}, fs.NewError("GetAttr", path, fs.ErrNotSupported)
 }
 
 // SetAttr modifies attributes for the file at the specified path.

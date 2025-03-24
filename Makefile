@@ -1,8 +1,9 @@
-.PHONY: proto build test clean run-server run-client
+.PHONY: proto build test clean run-server run-client build-fuse run-fuse
 
 # Define directories
 BIN_DIR := bin
 PROTO_DIR := proto
+MOUNT_DIR := /tmp/nfs-mount
 
 # Compiles protobuf files
 proto:
@@ -21,6 +22,12 @@ build: proto
 	go build -o $(BIN_DIR)/nfsclient cmd/client/main.go
 	go build -o $(BIN_DIR)/gethandle cmd/tools/gethandle.go
 
+# Build FUSE client
+build-fuse:
+	@echo "Building NFS FUSE client..."
+	mkdir -p $(BIN_DIR)
+	go build -o $(BIN_DIR)/nfs-fuse cmd/nfs-fuse/main.go
+
 # Run server
 run-server: build
 	@echo "Starting NFS server..."
@@ -30,6 +37,18 @@ run-server: build
 run-client: build
 	@echo "Running NFS client..."
 	$(BIN_DIR)/nfsclient
+
+# Run FUSE client
+run-fuse: build-fuse
+	@echo "Creating mount directory..."
+	mkdir -p $(MOUNT_DIR)
+	@echo "Starting NFS FUSE client..."
+	$(BIN_DIR)/nfs-fuse -mount $(MOUNT_DIR)
+
+# Unmount FUSE filesystem
+unmount-fuse:
+	@echo "Unmounting FUSE filesystem..."
+	fusermount -uz $(MOUNT_DIR) || umount -f $(MOUNT_DIR) || true
 
 # Get file handle
 get-handle: build
@@ -42,7 +61,8 @@ test:
 	go test ./...
 
 # Clean generated files
-clean:
+clean: unmount-fuse
 	@echo "Cleaning up..."
 	rm -rf $(BIN_DIR)
 	rm -f pkg/api/*.pb.go
+	rm -rf $(MOUNT_DIR)

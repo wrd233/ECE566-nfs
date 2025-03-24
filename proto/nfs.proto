@@ -19,6 +19,9 @@ service NFSService {
   
   // Write to a file
   rpc Write(WriteRequest) returns (WriteResponse);
+
+  // Read Directory
+  rpc ReadDir(ReadDirRequest) returns (ReadDirResponse);
 }
 
 // GetAttrRequest is used to get file attributes
@@ -80,4 +83,28 @@ message WriteResponse {
   uint32 count = 3;              // Number of bytes written
   uint32 stability = 4;          // Stability level used
   uint64 verifier = 5;           // Write verifier (used for cached writes)
+}
+
+// ReadDirRequest is used to list directory entries
+message ReadDirRequest {
+  bytes directory_handle = 1;   // Directory handle
+  Credentials credentials = 2;   // Authentication credentials
+  uint64 cookie = 3;           // Cookie from previous ReadDir 
+  uint64 cookie_verifier = 4;   // Cookie verifier
+  uint32 count = 5;            // Maximum number of entries to return
+}
+
+// DirEntry represents a directory entry
+message DirEntry {
+  uint64 file_id = 1;           // File ID (inode number)
+  string name = 2;              // Entry name
+  uint64 cookie = 3;            // Cookie for next ReadDir
+}
+
+// ReadDirResponse contains the result of a ReadDir operation
+message ReadDirResponse {
+  Status status = 1;              // Result status
+  uint64 cookie_verifier = 2;     // Verifier for cookie
+  repeated DirEntry entries = 3;  // List of directory entries
+  bool eof = 4;                   // End of directory indicator
 }

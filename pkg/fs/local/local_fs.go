@@ -813,27 +813,49 @@ func (l *LocalFileSystem) ReadDir(ctx context.Context, dir string, cookie int64,
         return nil, 0, fs.NewError("ReadDir", dir, fs.ErrNotDir)
     }
     
-    // Read all directory entries
+    // Create all entries including "." and ".."
+    var allEntries []fs.DirEntry
+    
+    // Get inode for current directory
+    currentDirStat, ok := fileInfo.Sys().(*syscall.Stat_t)
+    if !ok {
+        return nil, 0, fs.NewError("ReadDir", dir, fmt.Errorf("unable to get system information"))
+    }
+    
+    // Add "." entry (current directory)
+    allEntries = append(allEntries, fs.DirEntry{
+        Name:   ".",
+        FileId: currentDirStat.Ino,
+        Cookie: 1,
+    })
+    
+    // Add ".." entry (parent directory)
+    parentPath := filepath.Dir(fullPath)
+    parentInfo, err := os.Stat(parentPath)
+    var parentIno uint64
+    if err == nil {
+        if parentStat, ok := parentInfo.Sys().(*syscall.Stat_t); ok {
+            parentIno = parentStat.Ino
+        }
+    }
+    if parentIno == 0 {
+        // If we couldn't get parent inode, use a derivative of current inode
+        parentIno = currentDirStat.Ino ^ 0x1234
+    }
+    
+    allEntries = append(allEntries, fs.DirEntry{
+        Name:   "..",
+        FileId: parentIno,
+        Cookie: 2,
+    })
+    
+    // Read regular directory entries
     entries, err := os.ReadDir(fullPath)
     if err != nil {
         return nil, 0, fs.NewError("ReadDir", dir, mapOSError(err))
     }
     
-    // Skip entries before cookie
-    if cookie > 0 && cookie < int64(len(entries)) {
-        entries = entries[cookie:]
-    } else if cookie > 0 {
-        // If cookie is beyond the end, return empty result
-        return []fs.DirEntry{}, int64(len(entries)), nil
-    }
-    
-    // Limit number of entries if count is specified
-    if count > 0 && count < len(entries) {
-        entries = entries[:count]
-    }
-    
-    // Convert to fs.DirEntry format
-    result := make([]fs.DirEntry, len(entries))
+    // Add regular entries
     for i, entry := range entries {
         // Generate a unique file ID (using inode number if possible)
         var fileId uint64
@@ -853,19 +875,55 @@ func (l *LocalFileSystem) ReadDir(ctx context.Context, dir string, cookie int64,
             fileId = h
         }
         
-        // Set the cookie for this entry (simple index-based approach)
-        nextCookie := cookie + int64(i) + 1
+        // Set the cookie for this entry (i+3 because "." is 1 and ".." is 2)
+        nextCookie := int64(i + 3)
         
-        result[i] = fs.DirEntry{
+        allEntries = append(allEntries, fs.DirEntry{
             Name:       entry.Name(),
             FileId:     fileId,
             Cookie:     nextCookie,
             Attributes: nil, // No attributes in basic ReadDir
+        })
+    }
+    
+    // Handle pagination using cookie
+    var result []fs.DirEntry
+    if cookie == 0 {
+        // First page, include all entries up to count
+        result = allEntries
+    } else {
+        // Find entries after the cookie
+        for _, entry := range allEntries {
+            if entry.Cookie > cookie {
+                result = append(result, entry)
+            }
         }
     }
     
-    // Return the next cookie value
-    nextCookie := cookie + int64(len(result))
+    // Limit number of entries if count is specified
+    if count > 0 && count < len(result) {
+        result = result[:count]
+    }
+    
+    // Calculate next cookie value
+    var nextCookie int64
+    if len(result) > 0 {
+        // Next cookie is the cookie of the last entry plus 1
+        nextCookie = result[len(result)-1].Cookie + 1
+    } else {
+        // No entries, use a cookie that indicates end of directory
+        nextCookie = int64(len(allEntries) + 1)
+    }
+    
+    // Update the inode map for "." and ".."
+    l.updateInodeMap(dir, currentDirStat.Ino)
+    
+    // Parent directory path relative to root
+    parentRelPath := filepath.Dir(dir)
+    if parentRelPath == "." {
+        parentRelPath = "/"
+    }
+    l.updateInodeMap(parentRelPath, parentIno)
     
     return result, nextCookie, nil
 }

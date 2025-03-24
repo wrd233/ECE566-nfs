@@ -561,3 +561,94 @@ func (s *NFSServer) cacheResponse(key string, response interface{}, ttl time.Dur
         s.reqCacheMu.Unlock()
     })
 }
+
+// ReadDir implements the ReadDir RPC method
+func (s *NFSServer) ReadDir(ctx context.Context, req *api.ReadDirRequest) (*api.ReadDirResponse, error) {
+    reqID := fmt.Sprintf("readdir-%d", time.Now().UnixNano())
+    clientAddr := "unknown"
+    if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
+        clientAddr = (*peer).String()
+    }
+    
+    result, err := s.processRequest(ctx, "ReadDir", reqID, clientAddr, func() (interface{}, error) {
+        // Validate directory handle
+        _, err := s.validateFileHandle(req.DirectoryHandle)
+        if err != nil {
+            return &api.ReadDirResponse{Status: api.Status_ERR_BADHANDLE}, nil
+        }
+        
+        // Convert directory handle to path
+        dirPath, err := s.fileSystem.FileHandleToPath(req.DirectoryHandle)
+        if err != nil {
+            return &api.ReadDirResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Get credentials
+        creds := nfs.ProtoCredsToFSCreds(req.Credentials)
+        
+        // Apply root squashing if enabled
+        if s.config.EnableRootSquash && creds.UID == 0 {
+            creds.UID = s.config.AnonUID
+            creds.GID = s.config.AnonGID
+        }
+        
+        // Check directory access permission
+        if err := s.fileSystem.Access(ctx, dirPath, fs.FileMode(4), creds); err != nil { // 4 = read
+            return &api.ReadDirResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Get file info to verify it's a directory
+        fileInfo, err := s.fileSystem.GetAttr(ctx, dirPath)
+        if err != nil {
+            return &api.ReadDirResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        if fileInfo.Type != fs.FileTypeDirectory {
+            return &api.ReadDirResponse{Status: api.Status_ERR_NOTDIR}, nil
+        }
+        
+        // Determine the maximum number of entries to return
+        maxCount := int(req.Count)
+        if maxCount <= 0 {
+            maxCount = 1000 // Default limit if not specified
+        } else if maxCount > 10000 {
+            maxCount = 10000 // Hard upper limit
+        }
+        
+        // Read directory entries
+        entries, _, err := s.fileSystem.ReadDir(ctx, dirPath, int64(req.Cookie), maxCount)
+        if err != nil {
+            return &api.ReadDirResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Convert file system entries to protocol entries
+        protoEntries := make([]*api.DirEntry, len(entries))
+        for i, entry := range entries {
+            protoEntries[i] = &api.DirEntry{
+                FileId: entry.FileId,
+                Name:   entry.Name,
+                Cookie: uint64(entry.Cookie),
+            }
+        }
+        
+        // Generate a cookie verifier (simple timestamp-based)
+        cookieVerifier := uint64(time.Now().UnixNano())
+        
+        // Check if we've reached the end of the directory
+        eof := len(entries) < maxCount
+        
+        // Return the response
+        return &api.ReadDirResponse{
+            Status:         api.Status_OK,
+            CookieVerifier: cookieVerifier,
+            Entries:        protoEntries,
+            Eof:            eof,
+        }, nil
+    })
+    
+    if err != nil {
+        return nil, err
+    }
+    
+    return result.(*api.ReadDirResponse), nil
+}

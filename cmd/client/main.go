@@ -188,6 +188,30 @@ func main() {
 			fmt.Printf("Last Modified: %s\n", 
 				time.Unix(resp.Attributes.Mtime.Seconds, int64(resp.Attributes.Mtime.Nano)))
 		}
+	case "readdir":
+		resp, err := client.ReadDir(ctx, &api.ReadDirRequest{
+			DirectoryHandle: fileHandle,
+			Credentials:     creds,
+			Cookie:          0, 
+			CookieVerifier:  0,
+			Count:           100,
+		})
+		
+		if err != nil {
+			log.Fatalf("ReadDir failed: %v", err)
+		}
+		
+		fmt.Printf("Status: %s\n", resp.Status)
+		if resp.Status == api.Status_OK {
+			fmt.Printf("Directory entries (%d):\n", len(resp.Entries))
+			fmt.Printf("%-20s %-20s %-10s\n", "Name", "FileID", "Cookie")
+			fmt.Printf("%-20s %-20s %-10s\n", "----", "------", "------")
+			for _, entry := range resp.Entries {
+				fmt.Printf("%-20s %-20d %-10d\n", entry.Name, entry.FileId, entry.Cookie)
+			}
+			fmt.Printf("EOF: %v\n", resp.Eof)
+			fmt.Printf("CookieVerifier: %d\n", resp.CookieVerifier)
+		}
 		
 	default:
 		fmt.Printf("Unsupported operation: %s\n", *operation)

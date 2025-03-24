@@ -872,3 +872,53 @@ func (s *NFSServer) Mkdir(ctx context.Context, req *api.MkdirRequest) (*api.Mkdi
     
     return result.(*api.MkdirResponse), nil
 }
+
+// GetRootHandle implements the GetRootHandle RPC method
+func (s *NFSServer) GetRootHandle(ctx context.Context, req *api.GetRootHandleRequest) (*api.GetRootHandleResponse, error) {
+    // Create a unique request ID and get client address
+    reqID := fmt.Sprintf("getroot-%d", time.Now().UnixNano())
+    clientAddr := "unknown"
+    if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
+        clientAddr = (*peer).String()
+    }
+    
+    // Process the request
+    result, err := s.processRequest(ctx, "GetRootHandle", reqID, clientAddr, func() (interface{}, error) {
+        // Get credentials
+        creds := nfs.ProtoCredsToFSCreds(req.Credentials)
+        
+        // Apply root squashing if enabled
+        if s.config.EnableRootSquash && creds.UID == 0 {
+            creds.UID = s.config.AnonUID
+            creds.GID = s.config.AnonGID
+        }
+        
+        // Get root directory handle
+        rootHandle, err := s.fileSystem.PathToFileHandle("/")
+        if err != nil {
+            return &api.GetRootHandleResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Get root directory attributes
+        rootInfo, err := s.fileSystem.GetAttr(ctx, "/")
+        if err != nil {
+            return &api.GetRootHandleResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Convert to NFS attributes
+        attrs := nfs.FSInfoToProtoAttributes(rootInfo)
+        
+        // Return successful response
+        return &api.GetRootHandleResponse{
+            Status:     api.Status_OK,
+            FileHandle: rootHandle,
+            Attributes: attrs,
+        }, nil
+    })
+    
+    if err != nil {
+        return nil, err
+    }
+    
+    return result.(*api.GetRootHandleResponse), nil
+}

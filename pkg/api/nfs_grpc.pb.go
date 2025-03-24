@@ -19,13 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NFSService_GetAttr_FullMethodName = "/nfs.NFSService/GetAttr"
-	NFSService_Lookup_FullMethodName  = "/nfs.NFSService/Lookup"
-	NFSService_Read_FullMethodName    = "/nfs.NFSService/Read"
-	NFSService_Write_FullMethodName   = "/nfs.NFSService/Write"
-	NFSService_ReadDir_FullMethodName = "/nfs.NFSService/ReadDir"
-	NFSService_Create_FullMethodName  = "/nfs.NFSService/Create"
-	NFSService_Mkdir_FullMethodName   = "/nfs.NFSService/Mkdir"
+	NFSService_GetAttr_FullMethodName       = "/nfs.NFSService/GetAttr"
+	NFSService_Lookup_FullMethodName        = "/nfs.NFSService/Lookup"
+	NFSService_Read_FullMethodName          = "/nfs.NFSService/Read"
+	NFSService_Write_FullMethodName         = "/nfs.NFSService/Write"
+	NFSService_ReadDir_FullMethodName       = "/nfs.NFSService/ReadDir"
+	NFSService_Create_FullMethodName        = "/nfs.NFSService/Create"
+	NFSService_Mkdir_FullMethodName         = "/nfs.NFSService/Mkdir"
+	NFSService_GetRootHandle_FullMethodName = "/nfs.NFSService/GetRootHandle"
 )
 
 // NFSServiceClient is the client API for NFSService service.
@@ -48,6 +49,8 @@ type NFSServiceClient interface {
 	Create(ctx context.Context, in *CreateRequest, opts ...grpc.CallOption) (*CreateResponse, error)
 	// Create a new directory
 	Mkdir(ctx context.Context, in *MkdirRequest, opts ...grpc.CallOption) (*MkdirResponse, error)
+	// GetRootHandle returns the file handle for the root directory
+	GetRootHandle(ctx context.Context, in *GetRootHandleRequest, opts ...grpc.CallOption) (*GetRootHandleResponse, error)
 }
 
 type nFSServiceClient struct {
@@ -128,6 +131,16 @@ func (c *nFSServiceClient) Mkdir(ctx context.Context, in *MkdirRequest, opts ...
 	return out, nil
 }
 
+func (c *nFSServiceClient) GetRootHandle(ctx context.Context, in *GetRootHandleRequest, opts ...grpc.CallOption) (*GetRootHandleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetRootHandleResponse)
+	err := c.cc.Invoke(ctx, NFSService_GetRootHandle_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NFSServiceServer is the server API for NFSService service.
 // All implementations must embed UnimplementedNFSServiceServer
 // for forward compatibility.
@@ -148,6 +161,8 @@ type NFSServiceServer interface {
 	Create(context.Context, *CreateRequest) (*CreateResponse, error)
 	// Create a new directory
 	Mkdir(context.Context, *MkdirRequest) (*MkdirResponse, error)
+	// GetRootHandle returns the file handle for the root directory
+	GetRootHandle(context.Context, *GetRootHandleRequest) (*GetRootHandleResponse, error)
 	mustEmbedUnimplementedNFSServiceServer()
 }
 
@@ -178,6 +193,9 @@ func (UnimplementedNFSServiceServer) Create(context.Context, *CreateRequest) (*C
 }
 func (UnimplementedNFSServiceServer) Mkdir(context.Context, *MkdirRequest) (*MkdirResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Mkdir not implemented")
+}
+func (UnimplementedNFSServiceServer) GetRootHandle(context.Context, *GetRootHandleRequest) (*GetRootHandleResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetRootHandle not implemented")
 }
 func (UnimplementedNFSServiceServer) mustEmbedUnimplementedNFSServiceServer() {}
 func (UnimplementedNFSServiceServer) testEmbeddedByValue()                    {}
@@ -326,6 +344,24 @@ func _NFSService_Mkdir_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NFSService_GetRootHandle_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRootHandleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NFSServiceServer).GetRootHandle(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NFSService_GetRootHandle_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NFSServiceServer).GetRootHandle(ctx, req.(*GetRootHandleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NFSService_ServiceDesc is the grpc.ServiceDesc for NFSService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -360,6 +396,10 @@ var NFSService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Mkdir",
 			Handler:    _NFSService_Mkdir_Handler,
+		},
+		{
+			MethodName: "GetRootHandle",
+			Handler:    _NFSService_GetRootHandle_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -68,6 +68,7 @@ type mockNFSService struct {
     api.UnimplementedNFSServiceServer
     readDirResponses map[string]*api.ReadDirResponse
     lookupResponses map[string]*api.LookupResponse
+    rootHandleResponse *api.GetRootHandleResponse
 }
 
 // 模拟ReadDir方法
@@ -165,6 +166,66 @@ func TestReadDir(t *testing.T) {
     }
 }
 
+
+// 添加GetRootHandle实现
+func (m *mockNFSService) GetRootHandle(ctx context.Context, req *api.GetRootHandleRequest) (*api.GetRootHandleResponse, error) {
+    if m.rootHandleResponse != nil {
+        return m.rootHandleResponse, nil
+    }
+    
+    // 默认响应
+    return &api.GetRootHandleResponse{
+        Status: api.Status_OK,
+        FileHandle: []byte("root-dir-handle"),
+        Attributes: &api.FileAttributes{
+            Type: api.FileType_DIRECTORY,
+            Mode: 0755,
+        },
+    }, nil
+}
+
+// 添加测试函数
+func TestGetRootFileHandle(t *testing.T) {
+    // Setup mock server
+    _, mockService, client := setupMockServer(t)
+    defer client.Close()
+    
+    // Setup test data
+    rootHandle := []byte("root-dir-handle")
+    
+    // Mock success response
+    mockService.rootHandleResponse = &api.GetRootHandleResponse{
+        Status: api.Status_OK,
+        FileHandle: rootHandle,
+        Attributes: &api.FileAttributes{
+            Type: api.FileType_DIRECTORY,
+            Mode: 0755,
+        },
+    }
+    
+    // Test successful case
+    ctx := context.Background()
+    handle, err := client.GetRootFileHandle(ctx)
+    if err != nil {
+        t.Fatalf("GetRootFileHandle failed: %v", err)
+    }
+    
+    // Verify returned handle
+    if string(handle) != string(rootHandle) {
+        t.Errorf("Wrong root handle: got %v, want %v", handle, rootHandle)
+    }
+    
+    // Test error case
+    mockService.rootHandleResponse = &api.GetRootHandleResponse{
+        Status: api.Status_ERR_SERVERFAULT,
+    }
+    
+    _, err = client.GetRootFileHandle(ctx)
+    if err == nil {
+        t.Error("Expected error for server fault, got nil")
+    }
+}
+
 // 测试Lookup方法
 func TestLookup(t *testing.T) {
     // 设置模拟服务器
@@ -217,7 +278,6 @@ func TestLookup(t *testing.T) {
     }
 }
 
-// Test LookupPath method
 func TestLookupPath(t *testing.T) {
     // Setup mock server
     _, mockService, client := setupMockServer(t)
@@ -229,9 +289,8 @@ func TestLookupPath(t *testing.T) {
     dir2Handle := []byte("dir2-handle")
     fileHandle := []byte("file-handle")
     
-    // Mock responses for path components
-    // Root lookup
-    mockService.lookupResponses[string([]byte{0, 0, 0, 0}) + ":." ] = &api.LookupResponse{
+    // Mock root handle response
+    mockService.rootHandleResponse = &api.GetRootHandleResponse{
         Status: api.Status_OK,
         FileHandle: rootHandle,
         Attributes: &api.FileAttributes{
@@ -240,6 +299,7 @@ func TestLookupPath(t *testing.T) {
         },
     }
     
+    // Mock other lookup responses
     // dir1 lookup
     mockService.lookupResponses[string(rootHandle) + ":dir1" ] = &api.LookupResponse{
         Status: api.Status_OK,

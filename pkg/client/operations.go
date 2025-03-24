@@ -215,14 +215,9 @@ func (c *Client) Rename(ctx context.Context, fromDirHandle []byte, fromName stri
 }
 
 // GetRootFileHandle retrieves the root directory file handle from the server
-// Implementation of the ExtendedNFSClient interface
 func (c *Client) GetRootFileHandle(ctx context.Context) ([]byte, error) {
-    // Create a specialized Lookup request for the root directory
-    req := &api.LookupRequest{
-        // For root lookup, we use a special empty handle
-        DirectoryHandle: []byte{0, 0, 0, 0},
-        // Use "." as the name to look up the directory itself
-        Name: ".",
+    // Create request
+    req := &api.GetRootHandleRequest{
         Credentials: &api.Credentials{
             Uid: 1000,
             Gid: 1000,
@@ -235,16 +230,16 @@ func (c *Client) GetRootFileHandle(ctx context.Context) ([]byte, error) {
     defer cancel()
     
     // Call the RPC method with retry logic
-    var resp *api.LookupResponse
+    var resp *api.GetRootHandleResponse
     var err error
     
     err = c.callWithRetry(callCtx, "GetRootFileHandle", func(retryCtx context.Context) error {
-        resp, err = c.nfsClient.Lookup(retryCtx, req)
+        resp, err = c.nfsClient.GetRootHandle(retryCtx, req)
         return err
     })
     
     if err != nil {
-        return nil, fmt.Errorf("获取根目录句柄失败: %w", err)
+        return nil, fmt.Errorf("Fail to get root: %w", err)
     }
     
     // Check the status

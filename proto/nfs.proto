@@ -28,6 +28,9 @@ service NFSService {
 
   // Create a new directory
   rpc Mkdir(MkdirRequest) returns (MkdirResponse);
+
+  // GetRootHandle returns the file handle for the root directory
+  rpc GetRootHandle(GetRootHandleRequest) returns (GetRootHandleResponse);
 }
 
 // GetAttrRequest is used to get file attributes
@@ -154,4 +157,16 @@ message MkdirResponse {
   bytes directory_handle = 2;       // Handle for the new directory
   FileAttributes attributes = 3;     // Attributes of the new directory
   FileAttributes dir_attributes = 4; // Parent directory attributes
+}
+
+// Request for getting root handle
+message GetRootHandleRequest {
+  Credentials credentials = 1;
+}
+
+// Response containing the root handle
+message GetRootHandleResponse {
+  Status status = 1;
+  bytes file_handle = 2;
+  FileAttributes attributes = 3;
 }

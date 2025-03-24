@@ -8,6 +8,7 @@ import (
 	"os/signal"
     "syscall"
     "os/exec"
+    "log"
 
 	"github.com/example/nfsserver/pkg/fuse"
 )
@@ -15,6 +16,7 @@ import (
 func main() {
 	// Parse command line arguments
 	mountPoint := flag.String("mount", "", "Mount point for NFS filesystem")
+	serverAddr := flag.String("server", "localhost:2049", "NFS server address")
 	readOnly := flag.Bool("readonly", false, "Mount filesystem as read-only")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 	flag.Parse()
@@ -26,9 +28,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Ensure mount point exists
+	if _, err := os.Stat(*mountPoint); os.IsNotExist(err) {
+		log.Printf("Creating mount point: %s", *mountPoint)
+		if err := os.MkdirAll(*mountPoint, 0755); err != nil {
+			log.Fatalf("Failed to create mount point: %v", err)
+		}
+	}
+
 	// Create mount options
 	options := fuse.MountOptions{
 		MountPoint:   *mountPoint,
+		ServerAddr:   *serverAddr,
 		ReadOnly:     *readOnly,
 		CacheTimeout: 1 * time.Minute,
 		Debug:        *debug,

@@ -48,7 +48,7 @@ func DefaultConfig() *Config {
 	}
 }
 
-// Client represents an NFS client
+// Client represents an NFS client and implements the NFSClient interface
 type Client struct {
 	// gRPC connection to the server
 	conn *grpc.ClientConn
@@ -67,7 +67,7 @@ type Client struct {
 }
 
 // NewClient creates a new NFS client
-func NewClient(config *Config) (*Client, error) {
+func NewClient(config *Config) (NFSClient, error) {
 	if config == nil {
 		config = DefaultConfig()
 	}
@@ -109,14 +109,3 @@ func (c *Client) Close() error {
 	}
 	return nil
 }
-
-// GetRootFileHandle retrieves the root directory file handle from the server
-func (c *Client) GetRootFileHandle() ([]byte, error) {
-	// TODO: Implement this method
-	// This would typically involve a LOOKUP operation on "/" or a special
-	// operation to get the root handle, depending on the server implementation
-	
-	return nil, fmt.Errorf("not implemented")
-}
-
-// TODO: Add more client methods that map to NFS operations

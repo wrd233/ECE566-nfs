@@ -2,12 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
-	"os"
 	"time"
-	"encoding/hex"
 
 	"github.com/example/nfsserver/pkg/api"
 	"google.golang.org/grpc"
@@ -18,9 +17,10 @@ func main() {
 	// Parse command line flags
 	serverAddr := flag.String("server", "localhost:2049", "NFS server address")
 	handleHex := flag.String("handle", "", "File handle in hex format")
-	operation := flag.String("op", "getattr", "Operation to perform (getattr)")
+	operation := flag.String("op", "getattr", "Operation to perform (getattr, lookup)")
 	uid := flag.Uint("uid", 1000, "User ID")
 	gid := flag.Uint("gid", 1000, "Group ID")
+	name := flag.String("name", "", "Name to look up (for lookup operation)")
 	
 	flag.Parse()
 	
@@ -48,16 +48,15 @@ func main() {
 	// Parse or get the file handle
 	var fileHandle []byte
 	if *handleHex != "" {
-		handleBytes, err := hex.DecodeString(*handleHex)
+		// Parse hex string to bytes
+		var err error
+		fileHandle, err = hex.DecodeString(*handleHex)
 		if err != nil {
 			log.Fatalf("Invalid handle format: %v", err)
 		}
-		fileHandle = handleBytes
 		log.Printf("Using handle: %x (length: %d bytes)", fileHandle, len(fileHandle))
 	} else {
-		// If no handle provided, try to get it from the server
-		// This is a placeholder for now
-		fileHandle = []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+		log.Fatalf("File handle is required")
 	}
 	
 	// Perform the requested operation
@@ -71,9 +70,6 @@ func main() {
 		if err != nil {
 			log.Fatalf("GetAttr failed: %v", err)
 		}
-
-		log.Printf("Raw response: %+v", resp)
-		log.Printf("Status code: %v (%d)", resp.Status, resp.Status)
 		
 		// Display the result
 		fmt.Printf("Status: %s\n", resp.Status)
@@ -86,8 +82,34 @@ func main() {
 				time.Unix(resp.Attributes.Mtime.Seconds, int64(resp.Attributes.Mtime.Nano)))
 		}
 		
+	case "lookup":
+		if *name == "" {
+			log.Fatalf("Name is required for lookup operation")
+		}
+		
+		resp, err := client.Lookup(ctx, &api.LookupRequest{
+			DirectoryHandle: fileHandle,
+			Name:            *name,
+			Credentials:     creds,
+		})
+		
+		if err != nil {
+			log.Fatalf("Lookup failed: %v", err)
+		}
+		
+		// Display the result
+		fmt.Printf("Status: %s\n", resp.Status)
+		if resp.Status == api.Status_OK {
+			fmt.Printf("File Handle: %x\n", resp.FileHandle)
+			fmt.Printf("File Type: %s\n", resp.Attributes.Type)
+			fmt.Printf("Mode: %o\n", resp.Attributes.Mode)
+			fmt.Printf("Size: %d bytes\n", resp.Attributes.Size)
+			fmt.Printf("Owner: %d:%d\n", resp.Attributes.Uid, resp.Attributes.Gid)
+			fmt.Printf("Last Modified: %s\n", 
+				time.Unix(resp.Attributes.Mtime.Seconds, int64(resp.Attributes.Mtime.Nano)))
+		}
+		
 	default:
 		fmt.Printf("Unsupported operation: %s\n", *operation)
-		os.Exit(1)
 	}
 }

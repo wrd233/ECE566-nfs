@@ -9,6 +9,7 @@ import (
 	"net"
 	"sync"
 	"time"
+	"path/filepath"
 
 	"github.com/example/nfsserver/pkg/api"
 	"github.com/example/nfsserver/pkg/fs"
@@ -247,11 +248,104 @@ func (s *NFSServer) GetAttr(ctx context.Context, req *api.GetAttrRequest) (*api.
 
 // Lookup implements the Lookup RPC method
 func (s *NFSServer) Lookup(ctx context.Context, req *api.LookupRequest) (*api.LookupResponse, error) {
-	// This is a placeholder implementation
-	// It will be implemented in a future step
-	return &api.LookupResponse{
-		Status: api.Status_ERR_NOTSUPP,
-	}, nil
+    // Create a unique request ID and get client address
+    reqID := fmt.Sprintf("lookup-%d", time.Now().UnixNano())
+    clientAddr := "unknown"
+    if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
+        clientAddr = (*peer).String()
+    }
+    
+    // Process the request
+    result, err := s.processRequest(ctx, "Lookup", reqID, clientAddr, func() (interface{}, error) {
+        // Validate directory handle
+        _, err := s.validateFileHandle(req.DirectoryHandle)
+        if err != nil {
+            return &api.LookupResponse{Status: api.Status_ERR_BADHANDLE}, nil
+        }
+        
+        // Convert directory handle to path
+        dirPath, err := s.fileSystem.FileHandleToPath(req.DirectoryHandle)
+        if err != nil {
+            return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Get credentials
+        creds := nfs.ProtoCredsToFSCreds(req.Credentials)
+        
+        // Apply root squashing if enabled
+        if s.config.EnableRootSquash && creds.UID == 0 {
+            creds.UID = s.config.AnonUID
+            creds.GID = s.config.AnonGID
+        }
+        
+        // Check directory access permission
+        if err := s.fileSystem.Access(ctx, dirPath, fs.FileMode(5), creds); err != nil { // 5 = read + execute
+            return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Handle special directory entries
+        targetPath := ""
+        switch req.Name {
+        case ".":
+            targetPath = dirPath
+        case "..":
+            // For parent directory, we need to find the actual parent
+            if dirPath == "/" {
+                // Root directory has itself as parent
+                targetPath = "/"
+            } else {
+                // Get parent directory path
+                targetPath = filepath.Dir(dirPath)
+                if targetPath == "." {
+                    targetPath = "/"
+                }
+            }
+        default:
+            // Look up the file in the directory
+            targetPath, _ , err = s.fileSystem.Lookup(ctx, dirPath, req.Name)
+            if err != nil {
+                return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
+            }
+        }
+        
+        // Get file attributes
+        fileInfo, err := s.fileSystem.GetAttr(ctx, targetPath)
+        if err != nil {
+            return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Get directory attributes if needed (optional)
+        var dirAttrs *api.FileAttributes
+        if dirPath != targetPath { // Not looking up "."
+            dirInfo, err := s.fileSystem.GetAttr(ctx, dirPath)
+            if err == nil {
+                dirAttrs = nfs.FSInfoToProtoAttributes(dirInfo)
+            }
+        }
+        
+        // Generate file handle for the target
+        fileHandle, err := s.fileSystem.PathToFileHandle(targetPath)
+        if err != nil {
+            return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Convert file info to NFS attributes
+        attrs := nfs.FSInfoToProtoAttributes(fileInfo)
+        
+        // Return successful response
+        return &api.LookupResponse{
+            Status:        api.Status_OK,
+            FileHandle:    fileHandle,
+            Attributes:    attrs,
+            DirAttributes: dirAttrs,
+        }, nil
+    })
+    
+    if err != nil {
+        return nil, err
+    }
+    
+    return result.(*api.LookupResponse), nil
 }
 
 // Read implements the Read RPC method

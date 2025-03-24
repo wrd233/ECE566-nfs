@@ -19,6 +19,8 @@ func main() {
 	serverAddr := flag.String("server", "localhost:2049", "NFS server address")
 	readOnly := flag.Bool("readonly", false, "Mount filesystem as read-only")
 	debug := flag.Bool("debug", false, "Enable debug logging")
+	
+	// Parse flags
 	flag.Parse()
 
 	// Check if mount point is provided

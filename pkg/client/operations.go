@@ -6,6 +6,7 @@ import (
 	"time"
 	"strings"
     "path/filepath"
+	"log"
 
 	"github.com/example/nfsserver/pkg/api"
 )
@@ -95,37 +96,99 @@ func (c *Client) Lookup(ctx context.Context, dirHandle []byte, name string) ([]b
 
 // Read reads data from a file
 func (c *Client) Read(ctx context.Context, fileHandle []byte, offset int64, count int) ([]byte, bool, error) {
-	// Create request
-	_ = &api.ReadRequest{
-		FileHandle: fileHandle,
-		Credentials: &api.Credentials{
-			Uid: 1000,
-			Gid: 1000,
-		},
-		Offset: uint64(offset),
-		Count: uint32(count),
-	}
-	
-	// TODO: Implement actual Read operation
-	return nil, false, fmt.Errorf("not implemented")
+    // Limit read size if specified count is too large
+    if count <= 0 {
+        count = 1024 * 1024 // Default to 1MB if not specified
+    } else if count > 10*1024*1024 {
+        count = 10 * 1024 * 1024 // Cap at 10MB for safety
+    }
+    
+    // Create request
+    req := &api.ReadRequest{
+        FileHandle: fileHandle,
+        Credentials: &api.Credentials{
+            Uid: 1000,
+            Gid: 1000,
+            Groups: []uint32{1000},
+        },
+        Offset: uint64(offset),
+        Count: uint32(count),
+    }
+    
+    // Create a context with timeout
+    callCtx, cancel := context.WithTimeout(ctx, c.config.Timeout)
+    defer cancel()
+    
+    // Call the RPC method with retry logic
+    var resp *api.ReadResponse
+    var err error
+    
+    err = c.callWithRetry(callCtx, "Read", func(retryCtx context.Context) error {
+        resp, err = c.nfsClient.Read(retryCtx, req)
+        return err
+    })
+    
+    if err != nil {
+        return nil, false, fmt.Errorf("Read RPC failed: %w", err)
+    }
+    
+    // Check the status
+    if resp.Status != api.Status_OK {
+        return nil, false, StatusToError("Read", resp.Status)
+    }
+    
+    return resp.Data, resp.Eof, nil
 }
 
 // Write writes data to a file
 func (c *Client) Write(ctx context.Context, fileHandle []byte, offset int64, data []byte, stability int) (int, error) {
-	// Create request
-	_ = &api.WriteRequest{
-		FileHandle: fileHandle,
-		Credentials: &api.Credentials{
-			Uid: 1000,
-			Gid: 1000,
-		},
-		Offset: uint64(offset),
-		Data: data,
-		Stability: uint32(stability),
-	}
-	
-	// TODO: Implement actual Write operation
-	return 0, fmt.Errorf("not implemented")
+    // Validate stability level
+    if stability < 0 || stability > 2 {
+        stability = 0 // Default to UNSTABLE if invalid
+    }
+    
+    // Create request
+    req := &api.WriteRequest{
+        FileHandle: fileHandle,
+        Credentials: &api.Credentials{
+            Uid: 0,
+            Gid: 0,
+            Groups: []uint32{0},
+        },
+        Offset: uint64(offset),
+        Data: data,
+        Stability: uint32(stability),
+    }
+    
+    // Create a context with timeout
+    callCtx, cancel := context.WithTimeout(ctx, c.config.Timeout)
+    defer cancel()
+    
+    // Call the RPC method with retry logic
+    var resp *api.WriteResponse
+    var err error
+    
+    err = c.callWithRetry(callCtx, "Write", func(retryCtx context.Context) error {
+        resp, err = c.nfsClient.Write(retryCtx, req)
+        return err
+    })
+    
+    if err != nil {
+        return 0, fmt.Errorf("Write RPC failed: %w", err)
+    }
+    
+    // Check the status
+    if resp.Status != api.Status_OK {
+        return 0, StatusToError("Write", resp.Status)
+    }
+    
+    // If server used different stability than requested, log a warning
+    if resp.Stability != uint32(stability) {
+        log.Printf("Warning: Server used different stability level than requested (req: %d, used: %d)",
+            stability, resp.Stability)
+    }
+    
+    return int(resp.Count), nil
 }
 
 // ReadDir reads the contents of a directory
@@ -160,23 +223,52 @@ func (c *Client) ReadDir(ctx context.Context, dirHandle []byte) ([]*api.DirEntry
 	return resp.Entries, nil
 }
 
-// Create creates a new file
+// Create creates a new file in the specified directory
 func (c *Client) Create(ctx context.Context, dirHandle []byte, name string, attrs *api.FileAttributes, mode api.CreateMode) ([]byte, *api.FileAttributes, error) {
-	// Create request
-	_ = &api.CreateRequest{
-		DirectoryHandle: dirHandle,
-		Name: name,
-		Credentials: &api.Credentials{
-			Uid: 1000,
-			Gid: 1000,
-		},
-		Attributes: attrs,
-		Mode: mode,
-		Verifier: uint64(time.Now().UnixNano()), // Use current time as verifier
-	}
-	
-	// TODO: Implement actual Create operation
-	return nil, nil, fmt.Errorf("not implemented")
+    // If attributes not provided, use defaults
+    if attrs == nil {
+        attrs = &api.FileAttributes{
+            Mode: 0666, // Default to rw-rw-rw-
+        }
+    }
+    
+    // Create request
+    req := &api.CreateRequest{
+        DirectoryHandle: dirHandle,
+        Name:            name,
+        Credentials: &api.Credentials{
+            Uid: 1000,
+            Gid: 1000,
+            Groups: []uint32{1000},
+        },
+        Attributes: attrs,
+        Mode:       mode,
+        Verifier:   uint64(time.Now().UnixNano()), // Use current time as verifier
+    }
+    
+    // Create a context with timeout
+    callCtx, cancel := context.WithTimeout(ctx, c.config.Timeout)
+    defer cancel()
+    
+    // Call the RPC method with retry logic
+    var resp *api.CreateResponse
+    var err error
+    
+    err = c.callWithRetry(callCtx, "Create", func(retryCtx context.Context) error {
+        resp, err = c.nfsClient.Create(retryCtx, req)
+        return err
+    })
+    
+    if err != nil {
+        return nil, nil, fmt.Errorf("Create RPC failed: %w", err)
+    }
+    
+    // Check the status
+    if resp.Status != api.Status_OK {
+        return nil, nil, StatusToError("Create", resp.Status)
+    }
+    
+    return resp.FileHandle, resp.Attributes, nil
 }
 
 // Mkdir creates a new directory

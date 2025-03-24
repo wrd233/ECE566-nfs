@@ -91,3 +91,43 @@ func (d *Dir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 	log.Printf("Returning %d directory entries", len(result))
 	return result, nil
 }
+
+
+// Create implements the Create method for FUSE directories
+func (d *Dir) Create(ctx context.Context, req *fuse.CreateRequest, resp *fuse.CreateResponse) (fs.Node, fs.Handle, error) {
+    log.Printf("Creating file %s in directory %s (flags: %v, mode: %v)", 
+        req.Name, d.path, req.Flags, req.Mode)
+    
+    // Convert FUSE mode to NFS attributes
+    attrs := &api.FileAttributes{
+        Mode: uint32(req.Mode & 0777), // Keep only permission bits
+    }
+    
+    // Use NFS client to create the file
+    // Use GUARDED mode to prevent overwrite if exists
+    fileHandle, fileAttrs, err := d.fs.client.Create(ctx, d.handle, req.Name, attrs, api.CreateMode_GUARDED)
+    if err != nil {
+        log.Printf("Create failed: %v", err)
+        return nil, nil, fuse.EIO
+    }
+    
+    // Get file size from attributes or default to 0
+    var fileSize int64 = 0
+    if fileAttrs != nil {
+        fileSize = int64(fileAttrs.Size)
+    }
+    
+    // Create file node
+    file := &File{
+        fs:     d.fs,
+        handle: fileHandle,
+        path:   d.path + "/" + req.Name,
+        size:   fileSize,
+    }
+    
+    // Set appropriate flags in the response
+    resp.Flags |= fuse.OpenDirectIO
+    
+    // Return both node and handle (they're the same in our implementation)
+    return file, file, nil
+}

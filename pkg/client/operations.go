@@ -231,7 +231,7 @@ func (c *Client) Create(ctx context.Context, dirHandle []byte, name string, attr
             Mode: 0666, // Default to rw-rw-rw-
         }
     }
-    
+
     // Create request
     req := &api.CreateRequest{
         DirectoryHandle: dirHandle,
@@ -273,19 +273,48 @@ func (c *Client) Create(ctx context.Context, dirHandle []byte, name string, attr
 
 // Mkdir creates a new directory
 func (c *Client) Mkdir(ctx context.Context, dirHandle []byte, name string, attrs *api.FileAttributes) ([]byte, *api.FileAttributes, error) {
-	// Create request
-	_ = &api.MkdirRequest{
-		DirectoryHandle: dirHandle,
-		Name: name,
-		Credentials: &api.Credentials{
-			Uid: 1000,
-			Gid: 1000,
-		},
-		Attributes: attrs,
-	}
-	
-	// TODO: Implement actual Mkdir operation
-	return nil, nil, fmt.Errorf("not implemented")
+    // If attributes not provided, use defaults
+    if attrs == nil {
+        attrs = &api.FileAttributes{
+            Mode: 0777, // Default to rwxrwxrwx for directories
+        }
+    }
+    
+    // Create request
+    req := &api.MkdirRequest{
+        DirectoryHandle: dirHandle,
+        Name:            name,
+        Credentials: &api.Credentials{
+            Uid: 1000,
+            Gid: 1000,
+            Groups: []uint32{1000},
+        },
+        Attributes: attrs,
+    }
+    
+    // Create a context with timeout
+    callCtx, cancel := context.WithTimeout(ctx, c.config.Timeout)
+    defer cancel()
+    
+    // Call the RPC method with retry logic
+    var resp *api.MkdirResponse
+    var err error
+    
+    err = c.callWithRetry(callCtx, "Mkdir", func(retryCtx context.Context) error {
+        resp, err = c.nfsClient.Mkdir(retryCtx, req)
+        return err
+    })
+    
+    if err != nil {
+        return nil, nil, fmt.Errorf("Mkdir RPC failed: %w", err)
+    }
+    
+    // Check the status
+    if resp.Status != api.Status_OK {
+        return nil, nil, StatusToError("Mkdir", resp.Status)
+    }
+    
+    return resp.DirectoryHandle, resp.Attributes, nil
 }
 
 // Remove removes a file

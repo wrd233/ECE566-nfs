@@ -99,7 +99,7 @@ func (d *Dir) Create(ctx context.Context, req *fuse.CreateRequest, resp *fuse.Cr
         req.Name, d.path, req.Flags, req.Mode)
     
     // Convert FUSE mode to NFS attributes
-    // TODO: 忽略传入的权限，总是使用0666，暂时就先这样吧
+    // TODO:忽略传入的权限，总是使用0666
     attrs := &api.FileAttributes{
         Mode: 0666,
     }
@@ -131,4 +131,31 @@ func (d *Dir) Create(ctx context.Context, req *fuse.CreateRequest, resp *fuse.Cr
     
     // Return both node and handle (they're the same in our implementation)
     return file, file, nil
+}
+
+// Mkdir implements the Mkdir method for FUSE directories
+func (d *Dir) Mkdir(ctx context.Context, req *fuse.MkdirRequest) (fs.Node, error) {
+    log.Printf("Creating directory %s in directory %s (mode: %o)", 
+        req.Name, d.path, req.Mode)
+    
+    // Always use full permissions for directories, ignoring potential umask effects
+    attrs := &api.FileAttributes{
+        Mode: 0777, // rwxrwxrwx
+    }
+    
+    // Use NFS client to create the directory
+    dirHandle, _, err := d.fs.client.Mkdir(ctx, d.handle, req.Name, attrs)
+    if err != nil {
+        log.Printf("Mkdir failed: %v", err)
+        return nil, fuse.EIO
+    }
+    
+    // Create directory node
+    dir := &Dir{
+        fs:     d.fs,
+        handle: dirHandle,
+        path:   d.path + "/" + req.Name,
+    }
+    
+    return dir, nil
 }

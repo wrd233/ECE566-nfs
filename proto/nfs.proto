@@ -22,6 +22,12 @@ service NFSService {
 
   // Read Directory
   rpc ReadDir(ReadDirRequest) returns (ReadDirResponse);
+
+  // Create a new file
+  rpc Create(CreateRequest) returns (CreateResponse);
+
+  // Create a new directory
+  rpc Mkdir(MkdirRequest) returns (MkdirResponse);
 }
 
 // GetAttrRequest is used to get file attributes
@@ -107,4 +113,45 @@ message ReadDirResponse {
   uint64 cookie_verifier = 2;     // Verifier for cookie
   repeated DirEntry entries = 3;  // List of directory entries
   bool eof = 4;                   // End of directory indicator
+}
+
+// CreateMode represents the file creation mode
+enum CreateMode {
+  UNCHECKED = 0;  // Create file, overwrite if exists
+  GUARDED = 1;    // Create file, error if exists
+  EXCLUSIVE = 2;  // Create file only if it does not exist
+}
+
+// CreateRequest is used to create a new file
+message CreateRequest {
+  bytes directory_handle = 1;     // Directory handle
+  string name = 2;                // File name
+  Credentials credentials = 3;     // Authentication credentials
+  FileAttributes attributes = 4;   // Initial file attributes
+  CreateMode mode = 5;            // Creation mode
+  uint64 verifier = 6;            // Used for EXCLUSIVE mode
+}
+
+// CreateResponse contains the result of a Create operation
+message CreateResponse {
+  Status status = 1;                // Result status
+  bytes file_handle = 2;            // Handle for the new file
+  FileAttributes attributes = 3;     // Attributes of the new file
+  FileAttributes dir_attributes = 4; // Directory attributes
+}
+
+// MkdirRequest is used to create a new directory
+message MkdirRequest {
+  bytes directory_handle = 1;     // Directory handle
+  string name = 2;                // Directory name
+  Credentials credentials = 3;     // Authentication credentials
+  FileAttributes attributes = 4;   // Initial directory attributes
+}
+
+// MkdirResponse contains the result of a Mkdir operation
+message MkdirResponse {
+  Status status = 1;                // Result status
+  bytes directory_handle = 2;       // Handle for the new directory
+  FileAttributes attributes = 3;     // Attributes of the new directory
+  FileAttributes dir_attributes = 4; // Parent directory attributes
 }

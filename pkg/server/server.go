@@ -652,3 +652,223 @@ func (s *NFSServer) ReadDir(ctx context.Context, req *api.ReadDirRequest) (*api.
     
     return result.(*api.ReadDirResponse), nil
 }
+
+// Create implements the Create RPC method
+func (s *NFSServer) Create(ctx context.Context, req *api.CreateRequest) (*api.CreateResponse, error) {
+    // Create a unique request ID and get client address
+    reqID := fmt.Sprintf("create-%d", time.Now().UnixNano())
+    clientAddr := "unknown"
+    if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
+        clientAddr = (*peer).String()
+    }
+    
+    // Process the request
+    result, err := s.processRequest(ctx, "Create", reqID, clientAddr, func() (interface{}, error) {
+        // Validate directory handle
+        _, err := s.validateFileHandle(req.DirectoryHandle)
+        if err != nil {
+            return &api.CreateResponse{Status: api.Status_ERR_BADHANDLE}, nil
+        }
+        
+        // Convert directory handle to path
+        dirPath, err := s.fileSystem.FileHandleToPath(req.DirectoryHandle)
+        if err != nil {
+            return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Get credentials
+        creds := nfs.ProtoCredsToFSCreds(req.Credentials)
+        
+        // Apply root squashing if enabled
+        if s.config.EnableRootSquash && creds.UID == 0 {
+            creds.UID = s.config.AnonUID
+            creds.GID = s.config.AnonGID
+        }
+        
+        // Check write permission on directory
+        // if err := s.fileSystem.Access(ctx, dirPath, fs.FileMode(2|1), creds); err != nil {
+        //     return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        // }
+        
+        // Convert requested attributes to filesystem attributes
+        attr := nfs.ProtoAttributesToFSAttr(req.Attributes)
+        
+        // Set exclusive create flag based on mode
+        exclusive := false
+        if req.Mode == api.CreateMode_GUARDED || req.Mode == api.CreateMode_EXCLUSIVE {
+            exclusive = true
+        }
+        
+        // Handle EXCLUSIVE mode (check if file exists with this verifier)
+        if req.Mode == api.CreateMode_EXCLUSIVE {
+            // Check if file exists
+            targetPath := filepath.Join(dirPath, req.Name)
+            
+            // If we have this verifier cached for this path, return the cached response
+            cacheKey := fmt.Sprintf("create-excl-%s-%d", targetPath, req.Verifier)
+            if cachedResp, found := s.getCachedResponse(cacheKey); found {
+                log.Printf("Found cached exclusive create response: %s", cacheKey)
+                return cachedResp, nil
+            }
+            
+            // Try to get file info
+            _, err := s.fileSystem.GetAttr(ctx, targetPath)
+            if err == nil {
+                // File exists, return error for GUARDED mode
+                if req.Mode == api.CreateMode_GUARDED {
+                    return &api.CreateResponse{Status: api.Status_ERR_EXIST}, nil
+                }
+                
+                // For EXCLUSIVE mode, create a new response and cache it
+                fileHandle, err := s.fileSystem.PathToFileHandle(targetPath)
+                if err != nil {
+                    return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
+                }
+                
+                fileInfo, err := s.fileSystem.GetAttr(ctx, targetPath)
+                if err != nil {
+                    return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
+                }
+                
+                // Get directory attributes if requested
+                var dirAttrs *api.FileAttributes
+                dirInfo, err := s.fileSystem.GetAttr(ctx, dirPath)
+                if err == nil {
+                    dirAttrs = nfs.FSInfoToProtoAttributes(dirInfo)
+                }
+                
+                // Create response
+                resp := &api.CreateResponse{
+                    Status:        api.Status_OK,
+                    FileHandle:    fileHandle,
+                    Attributes:    nfs.FSInfoToProtoAttributes(fileInfo),
+                    DirAttributes: dirAttrs,
+                }
+                
+                // Cache the response for this exclusive create
+                s.cacheResponse(cacheKey, resp, 10*time.Minute)
+                
+                return resp, nil
+            }
+        }
+        
+        // Create the file
+        filePath, fileInfo, err := s.fileSystem.Create(ctx, dirPath, req.Name, attr, exclusive)
+        if err != nil {
+            return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Generate file handle for the new file
+        fileHandle, err := s.fileSystem.PathToFileHandle(filePath)
+        if err != nil {
+            return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Get directory attributes if requested
+        var dirAttrs *api.FileAttributes
+        dirInfo, err := s.fileSystem.GetAttr(ctx, dirPath)
+        if err == nil {
+            dirAttrs = nfs.FSInfoToProtoAttributes(dirInfo)
+        }
+        
+        // If EXCLUSIVE mode, cache the response
+        if req.Mode == api.CreateMode_EXCLUSIVE {
+            cacheKey := fmt.Sprintf("create-excl-%s-%d", filepath.Join(dirPath, req.Name), req.Verifier)
+            s.cacheResponse(cacheKey, &api.CreateResponse{
+                Status:        api.Status_OK,
+                FileHandle:    fileHandle,
+                Attributes:    nfs.FSInfoToProtoAttributes(fileInfo),
+                DirAttributes: dirAttrs,
+            }, 10*time.Minute)
+        }
+        
+        // Return successful response
+        return &api.CreateResponse{
+            Status:        api.Status_OK,
+            FileHandle:    fileHandle,
+            Attributes:    nfs.FSInfoToProtoAttributes(fileInfo),
+            DirAttributes: dirAttrs,
+        }, nil
+    })
+    
+    if err != nil {
+        return nil, err
+    }
+    
+    return result.(*api.CreateResponse), nil
+}
+
+// Mkdir implements the Mkdir RPC method
+func (s *NFSServer) Mkdir(ctx context.Context, req *api.MkdirRequest) (*api.MkdirResponse, error) {
+    // Create a unique request ID and get client address
+    reqID := fmt.Sprintf("mkdir-%d", time.Now().UnixNano())
+    clientAddr := "unknown"
+    if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
+        clientAddr = (*peer).String()
+    }
+    
+    // Process the request
+    result, err := s.processRequest(ctx, "Mkdir", reqID, clientAddr, func() (interface{}, error) {
+        // Validate directory handle
+        _, err := s.validateFileHandle(req.DirectoryHandle)
+        if err != nil {
+            return &api.MkdirResponse{Status: api.Status_ERR_BADHANDLE}, nil
+        }
+        
+        // Convert directory handle to path
+        dirPath, err := s.fileSystem.FileHandleToPath(req.DirectoryHandle)
+        if err != nil {
+            return &api.MkdirResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Get credentials
+        creds := nfs.ProtoCredsToFSCreds(req.Credentials)
+        
+        // Apply root squashing if enabled
+        if s.config.EnableRootSquash && creds.UID == 0 {
+            creds.UID = s.config.AnonUID
+            creds.GID = s.config.AnonGID
+        }
+        
+        // Check write permission on parent directory
+        // if err := s.fileSystem.Access(ctx, dirPath, fs.FileMode(2|1), creds); err != nil {
+        //     return &api.MkdirResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        // }
+        
+        // Convert requested attributes to filesystem attributes
+        attr := nfs.ProtoAttributesToFSAttr(req.Attributes)
+        
+        // Create the directory
+        newDirPath, dirInfo, err := s.fileSystem.Mkdir(ctx, dirPath, req.Name, attr)
+        if err != nil {
+            return &api.MkdirResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Generate directory handle for the new directory
+        dirHandle, err := s.fileSystem.PathToFileHandle(newDirPath)
+        if err != nil {
+            return &api.MkdirResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Get parent directory attributes if requested
+        var parentAttrs *api.FileAttributes
+        parentInfo, err := s.fileSystem.GetAttr(ctx, dirPath)
+        if err == nil {
+            parentAttrs = nfs.FSInfoToProtoAttributes(parentInfo)
+        }
+        
+        // Return successful response
+        return &api.MkdirResponse{
+            Status:         api.Status_OK,
+            DirectoryHandle: dirHandle,
+            Attributes:     nfs.FSInfoToProtoAttributes(dirInfo),
+            DirAttributes:  parentAttrs,
+        }, nil
+    })
+    
+    if err != nil {
+        return nil, err
+    }
+    
+    return result.(*api.MkdirResponse), nil
+}

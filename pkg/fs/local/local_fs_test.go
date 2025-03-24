@@ -637,8 +637,8 @@ func TestReadDir(t *testing.T) {
     }
     
     // Verify number of entries
-    if len(entries) != 3 { // subdir, file1.txt, file2.txt
-        t.Errorf("Wrong number of entries: got %d, want 3", len(entries))
+    if len(entries) != 5 { // ., .., subdir, file1.txt, file2.txt
+        t.Errorf("Wrong number of entries: got %d, want 5", len(entries))
     }
     
     // Verify entry names (don't assume any particular order)
@@ -647,6 +647,12 @@ func TestReadDir(t *testing.T) {
         names[entry.Name] = true
     }
     
+    if !names["."] {
+        t.Error("Missing directory entry '.'")
+    }
+    if !names[".."] {
+        t.Error("Missing directory entry '..'")
+    }
     if !names["subdir"] {
         t.Error("Missing directory entry 'subdir'")
     }

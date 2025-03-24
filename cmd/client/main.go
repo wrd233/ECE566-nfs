@@ -213,6 +213,86 @@ func main() {
 			fmt.Printf("CookieVerifier: %d\n", resp.CookieVerifier)
 		}
 		
+	case "create":
+		if *name == "" {
+			log.Fatalf("Name is required for create operation")
+		}
+		
+		// Create attributes with default mode if not specified
+		attrs := &api.FileAttributes{
+			Mode: 0644,
+		}
+		
+		// Create mode defaults to UNCHECKED
+		mode := api.CreateMode_UNCHECKED
+		
+		// Parse mode if specified
+		modeFlag := flag.Lookup("mode")
+		if modeFlag != nil && modeFlag.Value.String() != "" {
+			modeStr := modeFlag.Value.String()
+			switch modeStr {
+			case "guarded":
+				mode = api.CreateMode_GUARDED
+			case "exclusive":
+				mode = api.CreateMode_EXCLUSIVE
+			}
+		}
+		
+		// Make the request
+		resp, err := client.Create(ctx, &api.CreateRequest{
+			DirectoryHandle: fileHandle,
+			Name:            *name,
+			Credentials:     creds,
+			Attributes:      attrs,
+			Mode:            mode,
+			Verifier:        uint64(time.Now().UnixNano()), // Use current time as verifier
+		})
+		
+		if err != nil {
+			log.Fatalf("Create failed: %v", err)
+		}
+		
+		// Display the result
+		fmt.Printf("Status: %s\n", resp.Status)
+		if resp.Status == api.Status_OK {
+			fmt.Printf("File Handle: %x\n", resp.FileHandle)
+			fmt.Printf("File Type: %s\n", resp.Attributes.Type)
+			fmt.Printf("Mode: %o\n", resp.Attributes.Mode)
+			fmt.Printf("Size: %d bytes\n", resp.Attributes.Size)
+			fmt.Printf("Owner: %d:%d\n", resp.Attributes.Uid, resp.Attributes.Gid)
+		}
+	
+	case "mkdir":
+		if *name == "" {
+			log.Fatalf("Name is required for mkdir operation")
+		}
+		
+		// Create attributes with default mode for directory
+		attrs := &api.FileAttributes{
+			Mode: 0755,
+		}
+		
+		// Make the request
+		resp, err := client.Mkdir(ctx, &api.MkdirRequest{
+			DirectoryHandle: fileHandle,
+			Name:            *name,
+			Credentials:     creds,
+			Attributes:      attrs,
+		})
+		
+		if err != nil {
+			log.Fatalf("Mkdir failed: %v", err)
+		}
+		
+		// Display the result
+		fmt.Printf("Status: %s\n", resp.Status)
+		if resp.Status == api.Status_OK {
+			fmt.Printf("Directory Handle: %x\n", resp.DirectoryHandle)
+			fmt.Printf("Directory Type: %s\n", resp.Attributes.Type)
+			fmt.Printf("Mode: %o\n", resp.Attributes.Mode)
+			fmt.Printf("Owner: %d:%d\n", resp.Attributes.Uid, resp.Attributes.Gid)
+		}
+		
 	default:
 		fmt.Printf("Unsupported operation: %s\n", *operation)
 	}

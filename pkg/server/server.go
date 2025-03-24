@@ -11,6 +11,7 @@ import (
 	"time"
 	"path/filepath"
 	"hash/crc32"
+    "syscall"
 
 	"github.com/example/nfsserver/pkg/api"
 	"github.com/example/nfsserver/pkg/fs"
@@ -104,6 +105,10 @@ func NewNFSServer(config *Config, fileSystem fs.FileSystem) (*NFSServer, error) 
 
 // Start launches the NFS server
 func (s *NFSServer) Start() error {
+    // 设置umask为0，允许创建具有完整权限的文件
+    oldUmask := syscall.Umask(0)
+    defer syscall.Umask(oldUmask) // 在服务器关闭时恢复
+
 	// Create listener
 	lis, err := net.Listen("tcp", s.config.ListenAddress)
 	if err != nil {

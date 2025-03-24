@@ -99,8 +99,9 @@ func (d *Dir) Create(ctx context.Context, req *fuse.CreateRequest, resp *fuse.Cr
         req.Name, d.path, req.Flags, req.Mode)
     
     // Convert FUSE mode to NFS attributes
+    // TODO: 忽略传入的权限，总是使用0666，暂时就先这样吧
     attrs := &api.FileAttributes{
-        Mode: uint32(req.Mode & 0777), // Keep only permission bits
+        Mode: 0666,
     }
     
     // Use NFS client to create the file

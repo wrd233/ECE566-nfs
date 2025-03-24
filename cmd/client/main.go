@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"time"
+	"os"
 
 	"github.com/example/nfsserver/pkg/api"
 	"google.golang.org/grpc"
@@ -15,14 +16,17 @@ import (
 
 func main() {
 	// Parse command line flags
-    serverAddr := flag.String("server", "localhost:2049", "NFS server address")
-    handleHex := flag.String("handle", "", "File handle in hex format")
-    operation := flag.String("op", "getattr", "Operation to perform (getattr, lookup, read)")
-    uid := flag.Uint("uid", 1000, "User ID")
-    gid := flag.Uint("gid", 1000, "Group ID")
-    name := flag.String("name", "", "Name to look up (for lookup operation)")
-    offset := flag.Uint64("offset", 0, "Offset in file to read from (for read operation)")
-    count := flag.Uint("count", 1024, "Number of bytes to read (for read operation)")
+	serverAddr := flag.String("server", "localhost:2049", "NFS server address")
+	handleHex := flag.String("handle", "", "File handle in hex format")
+	operation := flag.String("op", "getattr", "Operation to perform (getattr, lookup, read, write)")
+	uid := flag.Uint("uid", 1000, "User ID")
+	gid := flag.Uint("gid", 1000, "Group ID")
+	name := flag.String("name", "", "Name to look up (for lookup operation)")
+	offset := flag.Uint64("offset", 0, "Offset in file (for read/write operation)")
+	count := flag.Uint("count", 1024, "Number of bytes to read (for read operation)")
+	dataStr := flag.String("data", "", "Data to write (for write operation)")
+	dataFile := flag.String("file", "", "File containing data to write (for write operation)")
+	stability := flag.Uint("stability", 0, "Stability level: 0=UNSTABLE, 1=DATA_SYNC, 2=FILE_SYNC (for write operation)")
 	
 	flag.Parse()
 	
@@ -137,6 +141,50 @@ func main() {
 			
 			// Print file attributes
 			fmt.Printf("File Size: %d bytes\n", resp.Attributes.Size)
+			fmt.Printf("Last Modified: %s\n", 
+				time.Unix(resp.Attributes.Mtime.Seconds, int64(resp.Attributes.Mtime.Nano)))
+		}
+	case "write":
+		// Prepare data to write
+		var data []byte
+		if *dataStr != "" {
+			data = []byte(*dataStr)
+		} else if *dataFile != "" {
+			var err error
+			data, err = os.ReadFile(*dataFile)
+			if err != nil {
+				log.Fatalf("Failed to read data file: %v", err)
+			}
+		} else {
+			log.Fatalf("Either -data or -file must be specified for write operation")
+		}
+		
+		// Validate stability value
+		if *stability > 2 {
+			log.Fatalf("Invalid stability value: %d (must be 0-2)", *stability)
+		}
+		
+		resp, err := client.Write(ctx, &api.WriteRequest{
+			FileHandle:  fileHandle,
+			Credentials: creds,
+			Offset:      *offset,
+			Data:        data,
+			Stability:   uint32(*stability),
+		})
+		
+		if err != nil {
+			log.Fatalf("Write failed: %v", err)
+		}
+		
+		// Display the result
+		fmt.Printf("Status: %s\n", resp.Status)
+		if resp.Status == api.Status_OK {
+			fmt.Printf("Bytes written: %d\n", resp.Count)
+			fmt.Printf("Stability level: %d\n", resp.Stability)
+			fmt.Printf("Write verifier: %d\n", resp.Verifier)
+			
+			// Print file attributes
+			fmt.Printf("New file size: %d bytes\n", resp.Attributes.Size)
 			fmt.Printf("Last Modified: %s\n", 
 				time.Unix(resp.Attributes.Mtime.Seconds, int64(resp.Attributes.Mtime.Nano)))
 		}

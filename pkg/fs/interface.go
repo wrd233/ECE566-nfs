@@ -84,6 +84,9 @@ type FileSystem interface {
     // PathToFileHandle converts a file system path to a file handle.
     // Returns the file handle and any error.
     PathToFileHandle(path string) ([]byte, error)
+
+    // Commit ensures that all data for the specified file has been flushed to stable storage
+    Commit(ctx context.Context, path string) error
 }
 
 // Credentials represents the authentication information for a user.

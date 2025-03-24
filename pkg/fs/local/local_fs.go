@@ -1014,3 +1014,27 @@ func (l *LocalFileSystem) Readlink(ctx context.Context, path string) (string, er
 func (l *LocalFileSystem) StatFS(ctx context.Context) (fs.FSStat, error) {
     return fs.FSStat{}, fs.NewError("StatFS", "", fs.ErrNotSupported)
 }
+
+
+// Commit ensures that all data for the specified file has been flushed to stable storage
+func (l *LocalFileSystem) Commit(ctx context.Context, path string) error {
+    // Resolve and validate path
+    fullPath, err := l.resolvePath(path)
+    if err != nil {
+        return fs.NewError("Commit", path, err)
+    }
+    
+    // Open the file for syncing
+    file, err := os.OpenFile(fullPath, os.O_RDWR, 0)
+    if err != nil {
+        return fs.NewError("Commit", path, mapOSError(err))
+    }
+    defer file.Close()
+    
+    // Sync to disk
+    if err := file.Sync(); err != nil {
+        return fs.NewError("Commit", path, mapOSError(err))
+    }
+    
+    return nil
+}

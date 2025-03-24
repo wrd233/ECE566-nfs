@@ -15,12 +15,14 @@ import (
 
 func main() {
 	// Parse command line flags
-	serverAddr := flag.String("server", "localhost:2049", "NFS server address")
-	handleHex := flag.String("handle", "", "File handle in hex format")
-	operation := flag.String("op", "getattr", "Operation to perform (getattr, lookup)")
-	uid := flag.Uint("uid", 1000, "User ID")
-	gid := flag.Uint("gid", 1000, "Group ID")
-	name := flag.String("name", "", "Name to look up (for lookup operation)")
+    serverAddr := flag.String("server", "localhost:2049", "NFS server address")
+    handleHex := flag.String("handle", "", "File handle in hex format")
+    operation := flag.String("op", "getattr", "Operation to perform (getattr, lookup, read)")
+    uid := flag.Uint("uid", 1000, "User ID")
+    gid := flag.Uint("gid", 1000, "Group ID")
+    name := flag.String("name", "", "Name to look up (for lookup operation)")
+    offset := flag.Uint64("offset", 0, "Offset in file to read from (for read operation)")
+    count := flag.Uint("count", 1024, "Number of bytes to read (for read operation)")
 	
 	flag.Parse()
 	
@@ -105,6 +107,36 @@ func main() {
 			fmt.Printf("Mode: %o\n", resp.Attributes.Mode)
 			fmt.Printf("Size: %d bytes\n", resp.Attributes.Size)
 			fmt.Printf("Owner: %d:%d\n", resp.Attributes.Uid, resp.Attributes.Gid)
+			fmt.Printf("Last Modified: %s\n", 
+				time.Unix(resp.Attributes.Mtime.Seconds, int64(resp.Attributes.Mtime.Nano)))
+		}
+	case "read":
+        resp, err := client.Read(ctx, &api.ReadRequest{
+            FileHandle:  fileHandle,
+            Credentials: creds,
+            Offset:      *offset,
+            Count:       uint32(*count),
+        })
+		
+		if err != nil {
+			log.Fatalf("Read failed: %v", err)
+		}
+		
+		// Display the result
+		fmt.Printf("Status: %s\n", resp.Status)
+		if resp.Status == api.Status_OK {
+			fmt.Printf("Data length: %d bytes\n", len(resp.Data))
+			fmt.Printf("EOF: %v\n", resp.Eof)
+			
+			// Print first 100 bytes of data (or less if data is smaller)
+			dataPreview := resp.Data
+			if len(dataPreview) > 100 {
+				dataPreview = dataPreview[:100]
+			}
+			fmt.Printf("Data preview: %s\n", string(dataPreview))
+			
+			// Print file attributes
+			fmt.Printf("File Size: %d bytes\n", resp.Attributes.Size)
 			fmt.Printf("Last Modified: %s\n", 
 				time.Unix(resp.Attributes.Mtime.Seconds, int64(resp.Attributes.Mtime.Nano)))
 		}

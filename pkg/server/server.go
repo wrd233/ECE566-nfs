@@ -350,11 +350,82 @@ func (s *NFSServer) Lookup(ctx context.Context, req *api.LookupRequest) (*api.Lo
 
 // Read implements the Read RPC method
 func (s *NFSServer) Read(ctx context.Context, req *api.ReadRequest) (*api.ReadResponse, error) {
-	// This is a placeholder implementation
-	// It will be implemented in a future step
-	return &api.ReadResponse{
-		Status: api.Status_ERR_NOTSUPP,
-	}, nil
+    // Create a unique request ID and get client address
+    reqID := fmt.Sprintf("read-%d", time.Now().UnixNano())
+    clientAddr := "unknown"
+    if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
+        clientAddr = (*peer).String()
+    }
+    
+    // Process the request
+    result, err := s.processRequest(ctx, "Read", reqID, clientAddr, func() (interface{}, error) {
+        // Validate file handle
+        _, err := s.validateFileHandle(req.FileHandle)
+        if err != nil {
+            return &api.ReadResponse{Status: api.Status_ERR_BADHANDLE}, nil
+        }
+        
+        // Convert file handle to path
+        path, err := s.fileSystem.FileHandleToPath(req.FileHandle)
+        if err != nil {
+            return &api.ReadResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Get credentials
+        creds := nfs.ProtoCredsToFSCreds(req.Credentials)
+        
+        // Apply root squashing if enabled
+        if s.config.EnableRootSquash && creds.UID == 0 {
+            creds.UID = s.config.AnonUID
+            creds.GID = s.config.AnonGID
+        }
+        
+        // Check read permission
+        if err := s.fileSystem.Access(ctx, path, fs.FileMode(4), creds); err != nil { // 4 = read
+            return &api.ReadResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Get file attributes
+        fileInfo, err := s.fileSystem.GetAttr(ctx, path)
+        if err != nil {
+            return &api.ReadResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Check if it's a regular file (not a directory)
+        if fileInfo.Type != fs.FileTypeRegular {
+            return &api.ReadResponse{Status: api.Status_ERR_ISDIR}, nil
+        }
+        
+        // Limit read size for security
+        count := req.Count
+        if count > uint32(s.config.MaxReadSize) {
+            count = uint32(s.config.MaxReadSize)
+        }
+        
+        // Read data from file
+        data, eof, err := s.fileSystem.Read(ctx, path, int64(req.Offset), int(count))
+        if err != nil {
+            return &api.ReadResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Update file attributes after read
+        newFileInfo, _ := s.fileSystem.GetAttr(ctx, path)
+        attrs := nfs.FSInfoToProtoAttributes(newFileInfo)
+        
+        // Return successful response
+        return &api.ReadResponse{
+            Status:     api.Status_OK,
+            Data:       data,
+            Eof:        eof,
+            Attributes: attrs,
+        }, nil
+    })
+    
+    if err != nil {
+        return nil, err
+    }
+    
+    return result.(*api.ReadResponse), nil
 }
 
 // Write implements the Write RPC method

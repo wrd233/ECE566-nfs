@@ -1,4 +1,4 @@
-.PHONY: proto build test clean run-server run-client build-fuse run-fuse
+.PHONY: proto build test clean run-server run-client build-fuse run-fuse test-client
 
 # Define directories
 BIN_DIR := bin
@@ -22,6 +22,12 @@ build: proto
 	go build -o $(BIN_DIR)/nfsclient cmd/client/main.go
 	go build -o $(BIN_DIR)/gethandle cmd/tools/gethandle.go
 
+# Build test client
+build-test-client: proto
+	@echo "Building NFS test client..."
+	mkdir -p $(BIN_DIR)
+	go build -o $(BIN_DIR)/test-client cmd/test-client/main.go
+
 # Build FUSE client
 build-fuse:
 	@echo "Building NFS FUSE client..."
@@ -37,6 +43,11 @@ run-server: build
 run-client: build
 	@echo "Running NFS client..."
 	$(BIN_DIR)/nfsclient
+
+# Run test client
+test-client: build-test-client
+	@echo "Running NFS test client..."
+	$(BIN_DIR)/test-client
 
 # Run FUSE client
 run-fuse: build-fuse
@@ -54,6 +65,11 @@ unmount-fuse:
 get-handle: build
 	@echo "Getting file handle..."
 	$(BIN_DIR)/gethandle
+
+# Test client module only
+test-client-module:
+	@echo "Testing NFS client module..."
+	go test ./pkg/client -v
 
 # Run tests
 test:

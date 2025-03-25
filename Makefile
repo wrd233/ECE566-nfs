@@ -19,19 +19,7 @@ build: proto
 	@echo "Building NFS server and client..."
 	mkdir -p $(BIN_DIR)
 	go build -o $(BIN_DIR)/nfsserver cmd/server/main.go
-	go build -o $(BIN_DIR)/nfsclient cmd/client/main.go
 	go build -o $(BIN_DIR)/gethandle cmd/tools/gethandle.go
-
-# Build test client
-build-test-client: proto
-	@echo "Building NFS test client..."
-	mkdir -p $(BIN_DIR)
-	go build -o $(BIN_DIR)/test-client cmd/test-client/main.go
-
-# Build FUSE client
-build-fuse:
-	@echo "Building NFS FUSE client..."
-	mkdir -p $(BIN_DIR)
 	go build -o $(BIN_DIR)/nfs-fuse cmd/nfs-fuse/main.go
 
 # Run server
@@ -39,18 +27,8 @@ run-server: build
 	@echo "Starting NFS server..."
 	$(BIN_DIR)/nfsserver
 
-# Run client
-run-client: build
-	@echo "Running NFS client..."
-	$(BIN_DIR)/nfsclient
-
-# Run test client
-test-client: build-test-client
-	@echo "Running NFS test client..."
-	$(BIN_DIR)/test-client
-
 # Run FUSE client
-run-fuse: build-fuse
+run-fuse: build
 	@echo "Creating mount directory..."
 	mkdir -p $(MOUNT_DIR)
 	@echo "Starting NFS FUSE client..."
@@ -65,11 +43,6 @@ unmount-fuse:
 get-handle: build
 	@echo "Getting file handle..."
 	$(BIN_DIR)/gethandle
-
-# Test client module only
-test-client-module:
-	@echo "Testing NFS client module..."
-	go test ./pkg/client -v
 
 # Run tests
 test:

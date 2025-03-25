@@ -11,7 +11,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// Config contains the NFS client configuration options
 type Config struct {
 	// ServerAddress is the address of the NFS server (e.g., "localhost:2049")
 	ServerAddress string
@@ -66,13 +65,11 @@ type Client struct {
 	// attrCache *AttrCache
 }
 
-// NewClient creates a new NFS client
 func NewClient(config *Config) (NFSClient, error) {
 	if config == nil {
 		config = DefaultConfig()
 	}
 	
-	// Create gRPC connection
 	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer cancel()
 	
@@ -86,14 +83,11 @@ func NewClient(config *Config) (NFSClient, error) {
 		return nil, fmt.Errorf("failed to connect to server: %w", err)
 	}
 	
-	// Create NFS service client
 	nfsClient := api.NewNFSServiceClient(conn)
 	
-	// Create handle cache stub
 	// TODO: Implement proper handle cache
 	handleCache := NewHandleCache(config.MaxCacheSize, config.CacheTTL)
 	
-	// Create and return the client
 	return &Client{
 		conn:        conn,
 		nfsClient:   nfsClient,
@@ -102,7 +96,6 @@ func NewClient(config *Config) (NFSClient, error) {
 	}, nil
 }
 
-// Close closes the client connection
 func (c *Client) Close() error {
 	if c.conn != nil {
 		return c.conn.Close()

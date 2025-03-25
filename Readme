@@ -6,7 +6,7 @@ A lightweight NFS server implementation with a FUSE client for mounting remote N
 
 Before you begin, ensure you have the following installed:
 
-- Go 1.18 or later
+- Go 1.22 or later
 - Protocol Buffers compiler (`protoc`)
 - FUSE development packages
 - Go Protocol Buffers plugins

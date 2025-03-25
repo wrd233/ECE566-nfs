@@ -21,7 +21,6 @@ type FileHandle struct {
     Generation uint32
 }
 
-// Size returns the size of serialized file handle in bytes
 func (fh *FileHandle) Size() int {
     return 16 // 4 + 8 + 4 bytes
 }

@@ -15,20 +15,12 @@ import (
     "github.com/example/nfsserver/pkg/fs"
 )
 
-// LocalFileSystem implements fs.FileSystem using the local operating system's
-// filesystem.
+// LocalFileSystem implements fs.FileSystem using the local operating system's filesystem.
 type LocalFileSystem struct {
-    // rootPath is the base directory in the local filesystem
     rootPath string
-    
-    // fsID is a unique identifier for this filesystem instance
-    fsID uint32
-    
-    // inodeMap maintains a mapping from inode numbers to paths
-    inodeMap sync.Map // map[uint64]string
-    
-    // generationMap tracks the generation number for each inode
-    generationMap sync.Map // map[uint64]uint32
+    fsID uint32             // fsID is a unique identifier for this filesystem instance
+    inodeMap sync.Map       // map[uint64]string
+    generationMap sync.Map  // map[uint64]uint32
 }
 
 // NewLocalFileSystem creates a new local filesystem implementation.
@@ -68,15 +60,12 @@ func generateFsID(path string) uint32 {
 }
 
 // resolvePath converts a path relative to the filesystem to an absolute OS path
-// with security checks to prevent directory traversal
 func (l *LocalFileSystem) resolvePath(path string) (string, error) {
-    // Remove leading slash if present for consistency
     path = strings.TrimPrefix(path, "/")
     
     // Clean the path to remove any '..' components
     cleanPath := filepath.Clean(path)
     
-    // Join with the root path
     fullPath := filepath.Join(l.rootPath, cleanPath)
     
     // Verify the path is still under the root path (prevent directory traversal)
@@ -125,27 +114,27 @@ func (l *LocalFileSystem) updateInodeMap(path string, inode uint64) {
 
 // lookupPathByInode finds a path by inode number
 func (l *LocalFileSystem) lookupPathByInode(inode uint64) (string, bool) {
-    log.Printf("lookupPathByInode: 查找 inode=%d 的路径", inode)
+    // log.Printf("lookupPathByInode: 查找 inode=%d 的路径", inode)
     
-    // 输出当前 inodeMap 的内容以便调试
-    log.Printf("当前 inodeMap 内容:")
-    count := 0
-    l.inodeMap.Range(func(key, value interface{}) bool {
-        count++
-        if count <= 10 { // 限制输出数量，避免日志过大
-            log.Printf("  - inode=%d -> path=%s", key, value)
-        }
-        return true
-    })
-    log.Printf("inodeMap 共有 %d 条记录", count)
+    // // 输出当前 inodeMap 的内容以便调试
+    // log.Printf("当前 inodeMap 内容:")
+    // count := 0
+    // l.inodeMap.Range(func(key, value interface{}) bool {
+    //     count++
+    //     if count <= 10 { // 限制输出数量，避免日志过大
+    //         log.Printf("  - inode=%d -> path=%s", key, value)
+    //     }
+    //     return true
+    // })
+    // log.Printf("inodeMap 共有 %d 条记录", count)
     
     if path, ok := l.inodeMap.Load(inode); ok {
         pathStr := path.(string)
-        log.Printf("lookupPathByInode: 找到路径: %s", pathStr)
+        // log.Printf("lookupPathByInode: 找到路径: %s", pathStr)
         return pathStr, true
     }
     
-    log.Printf("lookupPathByInode: 找不到 inode=%d 的路径", inode)
+    // log.Printf("lookupPathByInode: 找不到 inode=%d 的路径", inode)
     return "", false
 }
 
@@ -191,7 +180,6 @@ func (l *LocalFileSystem) convertFileInfo(path string, osInfo os.FileInfo) (fs.F
         return fs.FileInfo{}, fmt.Errorf("unable to get system information")
     }
     
-    // Determine file type
     fileType := fs.FileTypeRegular
     mode := osInfo.Mode()
     
@@ -211,10 +199,9 @@ func (l *LocalFileSystem) convertFileInfo(path string, osInfo os.FileInfo) (fs.F
         fileType = fs.FileTypeSocket
     }
     
-    // Convert permission bits
     fsMode := fs.FileMode(mode.Perm())
     
-    // Handle special bits (simplified)
+    // Handle special bits （TODO: more bits?）
     if mode&os.ModeSetuid != 0 {
         fsMode |= fs.ModeSetUID
     }
@@ -225,7 +212,6 @@ func (l *LocalFileSystem) convertFileInfo(path string, osInfo os.FileInfo) (fs.F
         fsMode |= fs.ModeSticky
     }
     
-    // Use ModTime for all time fields for simplicity and cross-platform compatibility
     modTime := osInfo.ModTime()
     
     // Create FileInfo
@@ -237,8 +223,8 @@ func (l *LocalFileSystem) convertFileInfo(path string, osInfo os.FileInfo) (fs.F
         Gid:        stat.Gid,
         Nlink:      uint32(stat.Nlink),
         Rdev:       uint64(stat.Rdev),
-        BlockSize:  uint32(512), // Default block size
-        Blocks:     uint64((osInfo.Size() + 511) / 512), // Approximate blocks from size
+        BlockSize:  uint32(512),                            // Default block size
+        Blocks:     uint64((osInfo.Size() + 511) / 512),    // Approximate blocks from size
         ModifyTime: modTime,
         AccessTime: modTime, // Use ModTime as a fallback
         ChangeTime: modTime, // Use ModTime as a fallback
@@ -315,7 +301,7 @@ func (l *LocalFileSystem) FileHandleToPath(fh []byte) (string, error) {
         return path, nil
     }
     
-    // If not in the mapping table, try dynamic lookup
+    // If not in the mapping table, try dynamic lookup(这一步需要加上，项目启动的时候不知怎么回事，map不一定完整)
     log.Printf("No record in mapping table, attempting dynamic lookup for inode=%d", handle.Inode)
     path, err := l.findPathByInode(handle.Inode)
     if err != nil {
@@ -330,7 +316,7 @@ func (l *LocalFileSystem) FileHandleToPath(fh []byte) (string, error) {
     return path, nil
 }
 
-// Add dynamic lookup method
+// Dynamic lookup method
 func (l *LocalFileSystem) findPathByInode(targetInode uint64) (string, error) {
     var result string
     var found bool
@@ -414,10 +400,9 @@ func (l *LocalFileSystem) SetAttr(ctx context.Context, path string, attr fs.File
     if err != nil {
         return fs.FileInfo{}, fs.NewError("SetAttr", path, mapOSError(err))
     }
+
     
-    // Apply attribute changes
-    
-    // Change mode if specified
+    // Change mode
     if attr.Mode != nil {
         err = os.Chmod(fullPath, os.FileMode(*attr.Mode))
         if err != nil {
@@ -425,9 +410,8 @@ func (l *LocalFileSystem) SetAttr(ctx context.Context, path string, attr fs.File
         }
     }
     
-    // Change ownership if specified
+    // Change ownership
     if attr.Uid != nil || attr.Gid != nil {
-        // Get current ownership if only one is specified
         stat, ok := fileInfo.Sys().(*syscall.Stat_t)
         if !ok {
             return fs.FileInfo{}, fs.NewError("SetAttr", path, fmt.Errorf("unable to get file system info"))
@@ -450,7 +434,7 @@ func (l *LocalFileSystem) SetAttr(ctx context.Context, path string, attr fs.File
         }
     }
     
-    // Change size if specified (truncate file)
+    // Change size
     if attr.Size != nil {
         err = os.Truncate(fullPath, *attr.Size)
         if err != nil {
@@ -458,7 +442,7 @@ func (l *LocalFileSystem) SetAttr(ctx context.Context, path string, attr fs.File
         }
     }
     
-    // Change access/modification times if specified
+    // Change access/modification times
     if attr.AccessTime != nil || attr.ModifyTime != nil {
         atime := fileInfo.ModTime() // Use current by default
         mtime := fileInfo.ModTime()
@@ -529,7 +513,6 @@ func (l *LocalFileSystem) Lookup(ctx context.Context, dir string, name string) (
 
 // Read reads data from a file at the specified offset.
 func (l *LocalFileSystem) Read(ctx context.Context, path string, offset int64, length int) ([]byte, bool, error) {
-    // Resolve and validate path
     fullPath, err := l.resolvePath(path)
     if err != nil {
         return nil, false, fs.NewError("Read", path, err)
@@ -572,10 +555,8 @@ func (l *LocalFileSystem) Read(ctx context.Context, path string, offset int64, l
         bytesToRead = int(fileSize - offset)
     }
     
-    // Create buffer for reading
     buffer := make([]byte, bytesToRead)
     
-    // Read data
     bytesRead, err := io.ReadFull(file, buffer)
     
     // Adjust buffer to actual bytes read
@@ -584,7 +565,6 @@ func (l *LocalFileSystem) Read(ctx context.Context, path string, offset int64, l
     // Determine EOF: we're at EOF if the current position after reading is at or past the file size
     eof := (offset + int64(bytesRead) >= fileSize)
     
-    // If we got an error other than EOF, return it
     if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
         return buffer, eof, fs.NewError("Read", path, mapOSError(err))
     }
@@ -594,7 +574,6 @@ func (l *LocalFileSystem) Read(ctx context.Context, path string, offset int64, l
 
 // Write writes data to a file at the specified offset.
 func (l *LocalFileSystem) Write(ctx context.Context, path string, offset int64, data []byte, sync bool) (int, error) {
-    // Resolve and validate path
     fullPath, err := l.resolvePath(path)
     if err != nil {
         return 0, fs.NewError("Write", path, err)
@@ -642,19 +621,16 @@ func (l *LocalFileSystem) Write(ctx context.Context, path string, offset int64, 
 
 // Access checks if the given credentials can access the file with the requested permission.
 func (l *LocalFileSystem) Access(ctx context.Context, path string, mode fs.FileMode, creds fs.Credentials) error {
-    // Resolve and validate path
     fullPath, err := l.resolvePath(path)
     if err != nil {
         return fs.NewError("Access", path, err)
     }
     
-    // Check if path exists
     fileInfo, err := os.Stat(fullPath)
     if err != nil {
         return fs.NewError("Access", path, mapOSError(err))
     }
     
-    // Get system-specific information
     stat, ok := fileInfo.Sys().(*syscall.Stat_t)
     if !ok {
         return fs.NewError("Access", path, fmt.Errorf("unable to get system information"))
@@ -668,13 +644,10 @@ func (l *LocalFileSystem) Access(ctx context.Context, path string, mode fs.FileM
     fileMode := fs.FileMode(fileInfo.Mode() & 0777) // Get permission bits
     
     if stat.Uid == creds.UID {
-        // User is owner, check owner permission bits
         checkPerm = (fileMode >> 6) & 7
     } else if stat.Gid == creds.GID || containsGroup(creds.Groups, stat.Gid) {
-        // User is in group, check group permission bits
         checkPerm = (fileMode >> 3) & 7
     } else {
-        // User is other, check other permission bits
         checkPerm = fileMode & 7
     }
     
@@ -698,13 +671,11 @@ func containsGroup(groups []uint32, gid uint32) bool {
 
 // Create creates a new file in the specified directory.
 func (l *LocalFileSystem) Create(ctx context.Context, dir string, name string, attr fs.FileAttr, excl bool) (string, fs.FileInfo, error) {
-    // Resolve parent directory path
     parentPath, err := l.resolvePath(dir)
     if err != nil {
         return "", fs.FileInfo{}, fs.NewError("Create", dir, err)
     }
     
-    // Check if parent is a directory
     parentInfo, err := os.Stat(parentPath)
     if err != nil {
         return "", fs.FileInfo{}, fs.NewError("Create", dir, mapOSError(err))
@@ -729,7 +700,7 @@ func (l *LocalFileSystem) Create(ctx context.Context, dir string, name string, a
         }
     }
     
-    // Determine permissions (use default if not specified)
+    // Determine permissions
     perm := os.FileMode(0644) // Default permission
     if attr.Mode != nil {
         perm = os.FileMode(*attr.Mode)
@@ -769,24 +740,20 @@ func (l *LocalFileSystem) Create(ctx context.Context, dir string, name string, a
 
 // Remove removes the specified file.
 func (l *LocalFileSystem) Remove(ctx context.Context, path string) error {
-    // Resolve and validate path
     fullPath, err := l.resolvePath(path)
     if err != nil {
         return fs.NewError("Remove", path, err)
     }
     
-    // Check if path exists
     fileInfo, err := os.Stat(fullPath)
     if err != nil {
         return fs.NewError("Remove", path, mapOSError(err))
     }
-    
-    // Check if it's a directory (use Rmdir for directories)
+
     if fileInfo.IsDir() {
         return fs.NewError("Remove", path, fs.ErrIsDir)
     }
     
-    // Remove the file
     err = os.Remove(fullPath)
     if err != nil {
         return fs.NewError("Remove", path, mapOSError(err))
@@ -797,13 +764,11 @@ func (l *LocalFileSystem) Remove(ctx context.Context, path string) error {
 
 // ReadDir reads the contents of a directory.
 func (l *LocalFileSystem) ReadDir(ctx context.Context, dir string, cookie int64, count int) ([]fs.DirEntry, int64, error) {
-    // Resolve and validate path
     fullPath, err := l.resolvePath(dir)
     if err != nil {
         return nil, 0, fs.NewError("ReadDir", dir, err)
     }
     
-    // Check if path is a directory
     fileInfo, err := os.Stat(fullPath)
     if err != nil {
         return nil, 0, fs.NewError("ReadDir", dir, mapOSError(err))
@@ -816,20 +781,19 @@ func (l *LocalFileSystem) ReadDir(ctx context.Context, dir string, cookie int64,
     // Create all entries including "." and ".."
     var allEntries []fs.DirEntry
     
-    // Get inode for current directory
     currentDirStat, ok := fileInfo.Sys().(*syscall.Stat_t)
     if !ok {
         return nil, 0, fs.NewError("ReadDir", dir, fmt.Errorf("unable to get system information"))
     }
     
-    // Add "." entry (current directory)
+    // Add "." entry
     allEntries = append(allEntries, fs.DirEntry{
         Name:   ".",
         FileId: currentDirStat.Ino,
         Cookie: 1,
     })
     
-    // Add ".." entry (parent directory)
+    // Add ".." entry
     parentPath := filepath.Dir(fullPath)
     parentInfo, err := os.Stat(parentPath)
     var parentIno uint64
@@ -839,7 +803,6 @@ func (l *LocalFileSystem) ReadDir(ctx context.Context, dir string, cookie int64,
         }
     }
     if parentIno == 0 {
-        // If we couldn't get parent inode, use a derivative of current inode
         parentIno = currentDirStat.Ino ^ 0x1234
     }
     
@@ -882,7 +845,7 @@ func (l *LocalFileSystem) ReadDir(ctx context.Context, dir string, cookie int64,
             Name:       entry.Name(),
             FileId:     fileId,
             Cookie:     nextCookie,
-            Attributes: nil, // No attributes in basic ReadDir
+            Attributes: nil,
         })
     }
     
@@ -930,13 +893,11 @@ func (l *LocalFileSystem) ReadDir(ctx context.Context, dir string, cookie int64,
 
 // Mkdir creates a new directory.
 func (l *LocalFileSystem) Mkdir(ctx context.Context, dir string, name string, attr fs.FileAttr) (string, fs.FileInfo, error) {
-    // Resolve parent directory path
     parentPath, err := l.resolvePath(dir)
     if err != nil {
         return "", fs.FileInfo{}, fs.NewError("Mkdir", dir, err)
     }
     
-    // Check if parent is a directory
     parentInfo, err := os.Stat(parentPath)
     if err != nil {
         return "", fs.FileInfo{}, fs.NewError("Mkdir", dir, mapOSError(err))
@@ -946,28 +907,24 @@ func (l *LocalFileSystem) Mkdir(ctx context.Context, dir string, name string, at
         return "", fs.FileInfo{}, fs.NewError("Mkdir", dir, fs.ErrNotDir)
     }
     
-    // Create full path for new directory
     newDirPath := filepath.Join(parentPath, name)
     
-    // Determine permissions (use default if not specified)
+    // Determine permissions
     perm := os.FileMode(0755) // Default permission
     if attr.Mode != nil {
         perm = os.FileMode(*attr.Mode)
     }
     
-    // Create the directory
     err = os.Mkdir(newDirPath, perm)
     if err != nil {
         return "", fs.FileInfo{}, fs.NewError("Mkdir", filepath.Join(dir, name), mapOSError(err))
     }
     
-    // Get information about the new directory
     newDirInfo, err := os.Stat(newDirPath)
     if err != nil {
         return "", fs.FileInfo{}, fs.NewError("Mkdir", filepath.Join(dir, name), mapOSError(err))
     }
     
-    // Convert to fs.FileInfo
     newDirRelPath := filepath.Join(dir, name)
     fsInfo, err := l.convertFileInfo(newDirRelPath, newDirInfo)
     if err != nil {
@@ -979,13 +936,11 @@ func (l *LocalFileSystem) Mkdir(ctx context.Context, dir string, name string, at
 
 // Rmdir removes the specified directory.
 func (l *LocalFileSystem) Rmdir(ctx context.Context, path string) error {
-    // Resolve and validate path
     fullPath, err := l.resolvePath(path)
     if err != nil {
         return fs.NewError("Rmdir", path, err)
     }
     
-    // Check if path exists and is a directory
     fileInfo, err := os.Stat(fullPath)
     if err != nil {
         return fs.NewError("Rmdir", path, mapOSError(err))
@@ -1021,7 +976,6 @@ func (l *LocalFileSystem) ReadDirPlus(ctx context.Context, dir string, cookie in
 
 // Rename renames a file or directory.
 func (l *LocalFileSystem) Rename(ctx context.Context, oldPath string, newPath string) error {
-    // Resolve and validate both paths
     oldFullPath, err := l.resolvePath(oldPath)
     if err != nil {
         return fs.NewError("Rename", oldPath, err)
@@ -1032,13 +986,11 @@ func (l *LocalFileSystem) Rename(ctx context.Context, oldPath string, newPath st
         return fs.NewError("Rename", newPath, err)
     }
     
-    // Check if source exists
     _, err = os.Stat(oldFullPath)
     if err != nil {
         return fs.NewError("Rename", oldPath, mapOSError(err))
     }
     
-    // Check if destination parent directory exists
     newParent := filepath.Dir(newFullPath)
     parentInfo, err := os.Stat(newParent)
     if err != nil {
@@ -1049,7 +1001,6 @@ func (l *LocalFileSystem) Rename(ctx context.Context, oldPath string, newPath st
         return fs.NewError("Rename", newPath, fs.ErrNotDir)
     }
     
-    // Perform the rename operation
     err = os.Rename(oldFullPath, newFullPath)
     if err != nil {
         return fs.NewError("Rename", oldPath+" to "+newPath, mapOSError(err))
@@ -1058,17 +1009,17 @@ func (l *LocalFileSystem) Rename(ctx context.Context, oldPath string, newPath st
     return nil
 }
 
-// Symlink creates a symbolic link.
+// TODO: Symlink creates a symbolic link.
 func (l *LocalFileSystem) Symlink(ctx context.Context, dir string, name string, target string, attr fs.FileAttr) (string, fs.FileInfo, error) {
     return "", fs.FileInfo{}, fs.NewError("Symlink", filepath.Join(dir, name), fs.ErrNotSupported)
 }
 
-// Readlink reads the target of a symbolic link.
+// TODO: Readlink reads the target of a symbolic link.
 func (l *LocalFileSystem) Readlink(ctx context.Context, path string) (string, error) {
     return "", fs.NewError("Readlink", path, fs.ErrNotSupported)
 }
 
-// StatFS retrieves file system statistics.
+// TODO: StatFS retrieves file system statistics.
 func (l *LocalFileSystem) StatFS(ctx context.Context) (fs.FSStat, error) {
     return fs.FSStat{}, fs.NewError("StatFS", "", fs.ErrNotSupported)
 }
@@ -1076,7 +1027,6 @@ func (l *LocalFileSystem) StatFS(ctx context.Context) (fs.FSStat, error) {
 
 // Commit ensures that all data for the specified file has been flushed to stable storage
 func (l *LocalFileSystem) Commit(ctx context.Context, path string) error {
-    // Resolve and validate path
     fullPath, err := l.resolvePath(path)
     if err != nil {
         return fs.NewError("Commit", path, err)

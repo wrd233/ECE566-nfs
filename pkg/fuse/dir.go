@@ -13,9 +13,9 @@ import (
 
 // Dir represents a directory in the filesystem
 type Dir struct {
-	fs     *NFSFS        // Reference to the file system
-	handle []byte        // NFS file handle for this directory
-	path   string        // Path for logging/debugging
+	fs     *NFSFS
+	handle []byte
+	path   string
 }
 
 // Attr sets the attributes of the directory
@@ -34,7 +34,6 @@ func (d *Dir) Attr(ctx context.Context, attr *fuse.Attr) error {
 func (d *Dir) Lookup(ctx context.Context, name string) (fs.Node, error) {
 	log.Printf("Looking up %s in directory %s", name, d.path)
 	
-	// Use NFS client to lookup the file
 	fileHandle, attrs, err := d.fs.client.Lookup(ctx, d.handle, name)
 	if err != nil {
 		log.Printf("Lookup failed: %v", err)
@@ -62,22 +61,17 @@ func (d *Dir) Lookup(ctx context.Context, name string) (fs.Node, error) {
 func (d *Dir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 	log.Printf("Reading directory: %s", d.path)
 	
-	// Use NFS client to read directory
 	entries, err := d.fs.client.ReadDir(ctx, d.handle)
 	if err != nil {
 		log.Printf("ReadDir failed: %v", err)
 		return nil, fuse.EIO
 	}
 	
-	// Convert NFS entries to FUSE dirents
 	result := make([]fuse.Dirent, 0, len(entries))
 	for _, entry := range entries {
 		var direntType fuse.DirentType
 		
-		// Try to determine the entry type
-		// In NFS, entry itself doesn't contain type,
-		// but we could do a Lookup to get attributes
-		// For simplicity, we'll just set it to DT_Unknown
+		// Try to determine the entry type. In NFS, entry itself doesn't contain type, but we could do a Lookup to get attributes. For simplicity, we'll just set it to DT_Unknown
 		direntType = fuse.DT_Unknown
 		
 		// Add the entry

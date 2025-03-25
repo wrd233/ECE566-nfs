@@ -35,7 +35,6 @@ type NFSError struct {
 	Err error
 }
 
-// Error implements the error interface
 func (e *NFSError) Error() string {
 	if e.Err != nil {
 		return fmt.Sprintf("%s failed: %s (%s) - %v", e.Op, e.Status, e.Message, e.Err)
@@ -43,12 +42,10 @@ func (e *NFSError) Error() string {
 	return fmt.Sprintf("%s failed: %s (%s)", e.Op, e.Status, e.Message)
 }
 
-// Unwrap returns the underlying error
 func (e *NFSError) Unwrap() error {
 	return e.Err
 }
 
-// NewNFSError creates a new NFS error
 func NewNFSError(op string, status api.Status, message string, err error) *NFSError {
 	return &NFSError{
 		Op:      op,
@@ -58,7 +55,6 @@ func NewNFSError(op string, status api.Status, message string, err error) *NFSEr
 	}
 }
 
-// StatusToError converts an NFS status to an error
 func StatusToError(op string, status api.Status) error {
 	if status == api.Status_OK {
 		return nil

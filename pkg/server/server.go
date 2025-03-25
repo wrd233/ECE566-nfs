@@ -21,28 +21,13 @@ import (
 
 // Config contains the NFS server configuration
 type Config struct {
-	// Network address to listen on (e.g. ":2049")
-	ListenAddress string
-
-	// Maximum concurrent requests
+	ListenAddress string    // default ":2049"
 	MaxConcurrent int
-
-	// Maximum read size in bytes
 	MaxReadSize int
-
-	// Maximum write size in bytes
 	MaxWriteSize int
-
-	// Request timeout in seconds
 	RequestTimeout int
-
-	// Enable root squashing (map root to anonymous user)
 	EnableRootSquash bool
-
-	// Anonymous user ID
 	AnonUID uint32
-
-	// Anonymous group ID
 	AnonGID uint32
 }
 
@@ -51,9 +36,9 @@ func DefaultConfig() *Config {
 	return &Config{
 		ListenAddress:    ":2049",
 		MaxConcurrent:    100,
-		MaxReadSize:      1024 * 1024, // 1MB
-		MaxWriteSize:     1024 * 1024, // 1MB
-		RequestTimeout:   30,          // 30 seconds
+		MaxReadSize:      1024 * 1024, 
+		MaxWriteSize:     1024 * 1024, 
+		RequestTimeout:   30,          
 		EnableRootSquash: true,
 		AnonUID:          65534, // nobody
 		AnonGID:          65534, // nogroup
@@ -184,8 +169,7 @@ func (s *NFSServer) validateFileHandle(handle []byte) ([]byte, error) {
 		return nil, nfs.NewNFSError(api.Status_ERR_BADHANDLE, "handle too short", nil)
 	}
 	
-	// In a real implementation, we would verify the handle signature here
-	// For now, we just return the handle
+	// TODO: For now, we just return the handle
 	return handle, nil
 }
 
@@ -198,15 +182,12 @@ func (s *NFSServer) GetAttr(ctx context.Context, req *api.GetAttrRequest) (*api.
 		clientAddr = (*peer).String()
 	}
 	
-	// Process the request
 	result, err := s.processRequest(ctx, "GetAttr", reqID, clientAddr, func() (interface{}, error) {
-		// Validate file handle
 		_, err := s.validateFileHandle(req.FileHandle)
 		if err != nil {
 			return &api.GetAttrResponse{Status: api.Status_ERR_BADHANDLE}, nil
 		}
 		
-		// Convert file handle to path
 		path, err := s.fileSystem.FileHandleToPath(req.FileHandle)
 		if err != nil {
 			return &api.GetAttrResponse{Status: nfs.MapErrorToStatus(err)}, nil
@@ -221,21 +202,17 @@ func (s *NFSServer) GetAttr(ctx context.Context, req *api.GetAttrRequest) (*api.
 			creds.GID = s.config.AnonGID
 		}
 		
-		// Check read permission
 		if err := s.fileSystem.Access(ctx, path, fs.FileMode(4), creds); err != nil {
 			return &api.GetAttrResponse{Status: nfs.MapErrorToStatus(err)}, nil
 		}
 		
-		// Get file attributes
 		fileInfo, err := s.fileSystem.GetAttr(ctx, path)
 		if err != nil {
 			return &api.GetAttrResponse{Status: nfs.MapErrorToStatus(err)}, nil
 		}
 		
-		// Convert to NFS attributes
 		attrs := nfs.FSInfoToProtoAttributes(fileInfo)
 		
-		// Return successful response
 		response := &api.GetAttrResponse{
 			Status:     api.Status_OK,
 			Attributes: attrs,
@@ -263,13 +240,11 @@ func (s *NFSServer) Lookup(ctx context.Context, req *api.LookupRequest) (*api.Lo
     
     // Process the request
     result, err := s.processRequest(ctx, "Lookup", reqID, clientAddr, func() (interface{}, error) {
-        // Validate directory handle
         _, err := s.validateFileHandle(req.DirectoryHandle)
         if err != nil {
             return &api.LookupResponse{Status: api.Status_ERR_BADHANDLE}, nil
         }
         
-        // Convert directory handle to path
         dirPath, err := s.fileSystem.FileHandleToPath(req.DirectoryHandle)
         if err != nil {
             return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
@@ -307,7 +282,6 @@ func (s *NFSServer) Lookup(ctx context.Context, req *api.LookupRequest) (*api.Lo
                 }
             }
         default:
-            // Look up the file in the directory
             targetPath, _ , err = s.fileSystem.Lookup(ctx, dirPath, req.Name)
             if err != nil {
                 return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
@@ -320,7 +294,6 @@ func (s *NFSServer) Lookup(ctx context.Context, req *api.LookupRequest) (*api.Lo
             return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
         }
         
-        // Get directory attributes if needed (optional)
         var dirAttrs *api.FileAttributes
         if dirPath != targetPath { // Not looking up "."
             dirInfo, err := s.fileSystem.GetAttr(ctx, dirPath)
@@ -335,10 +308,8 @@ func (s *NFSServer) Lookup(ctx context.Context, req *api.LookupRequest) (*api.Lo
             return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
         }
         
-        // Convert file info to NFS attributes
         attrs := nfs.FSInfoToProtoAttributes(fileInfo)
         
-        // Return successful response
         return &api.LookupResponse{
             Status:        api.Status_OK,
             FileHandle:    fileHandle,
@@ -365,7 +336,6 @@ func (s *NFSServer) Read(ctx context.Context, req *api.ReadRequest) (*api.ReadRe
     
     // Process the request
     result, err := s.processRequest(ctx, "Read", reqID, clientAddr, func() (interface{}, error) {
-        // Validate file handle
         _, err := s.validateFileHandle(req.FileHandle)
         if err != nil {
             return &api.ReadResponse{Status: api.Status_ERR_BADHANDLE}, nil
@@ -377,10 +347,8 @@ func (s *NFSServer) Read(ctx context.Context, req *api.ReadRequest) (*api.ReadRe
             return &api.ReadResponse{Status: nfs.MapErrorToStatus(err)}, nil
         }
         
-        // Get credentials
         creds := nfs.ProtoCredsToFSCreds(req.Credentials)
         
-        // Apply root squashing if enabled
         if s.config.EnableRootSquash && creds.UID == 0 {
             creds.UID = s.config.AnonUID
             creds.GID = s.config.AnonGID
@@ -391,7 +359,6 @@ func (s *NFSServer) Read(ctx context.Context, req *api.ReadRequest) (*api.ReadRe
             return &api.ReadResponse{Status: nfs.MapErrorToStatus(err)}, nil
         }
         
-        // Get file attributes
         fileInfo, err := s.fileSystem.GetAttr(ctx, path)
         if err != nil {
             return &api.ReadResponse{Status: nfs.MapErrorToStatus(err)}, nil
@@ -418,7 +385,6 @@ func (s *NFSServer) Read(ctx context.Context, req *api.ReadRequest) (*api.ReadRe
         newFileInfo, _ := s.fileSystem.GetAttr(ctx, path)
         attrs := nfs.FSInfoToProtoAttributes(newFileInfo)
         
-        // Return successful response
         return &api.ReadResponse{
             Status:     api.Status_OK,
             Data:       data,
@@ -443,15 +409,12 @@ func (s *NFSServer) Write(ctx context.Context, req *api.WriteRequest) (*api.Writ
         clientAddr = (*peer).String()
     }
     
-    // Process the request
     result, err := s.processRequest(ctx, "Write", reqID, clientAddr, func() (interface{}, error) {
-        // Validate file handle
         _, err := s.validateFileHandle(req.FileHandle)
         if err != nil {
             return &api.WriteResponse{Status: api.Status_ERR_BADHANDLE}, nil
         }
         
-        // Convert file handle to path
         path, err := s.fileSystem.FileHandleToPath(req.FileHandle)
         if err != nil {
             return &api.WriteResponse{Status: nfs.MapErrorToStatus(err)}, nil
@@ -471,18 +434,15 @@ func (s *NFSServer) Write(ctx context.Context, req *api.WriteRequest) (*api.Writ
             return &api.WriteResponse{Status: nfs.MapErrorToStatus(err)}, nil
         }
         
-        // Get file attributes
         fileInfo, err := s.fileSystem.GetAttr(ctx, path)
         if err != nil {
             return &api.WriteResponse{Status: nfs.MapErrorToStatus(err)}, nil
         }
         
-        // Check if it's a regular file (not a directory)
         if fileInfo.Type != fs.FileTypeRegular {
             return &api.WriteResponse{Status: api.Status_ERR_ISDIR}, nil
         }
         
-        // Limit write size for security
         dataSize := len(req.Data)
         if dataSize > s.config.MaxWriteSize {
             return &api.WriteResponse{Status: api.Status_ERR_FBIG}, nil
@@ -519,7 +479,6 @@ func (s *NFSServer) Write(ctx context.Context, req *api.WriteRequest) (*api.Writ
         newFileInfo, _ := s.fileSystem.GetAttr(ctx, path)
         attrs := nfs.FSInfoToProtoAttributes(newFileInfo)
         
-        // Create response
         resp := &api.WriteResponse{
             Status:     api.Status_OK,
             Count:      uint32(bytesWritten),
@@ -528,7 +487,7 @@ func (s *NFSServer) Write(ctx context.Context, req *api.WriteRequest) (*api.Writ
             Attributes: attrs,
         }
         
-        // Cache the response for idempotent operations
+        // TODO: Cache the response for idempotent operations
         s.cacheResponse(cacheKey, resp, 5*time.Minute)
         
         return resp, nil
@@ -576,13 +535,11 @@ func (s *NFSServer) ReadDir(ctx context.Context, req *api.ReadDirRequest) (*api.
     }
     
     result, err := s.processRequest(ctx, "ReadDir", reqID, clientAddr, func() (interface{}, error) {
-        // Validate directory handle
         _, err := s.validateFileHandle(req.DirectoryHandle)
         if err != nil {
             return &api.ReadDirResponse{Status: api.Status_ERR_BADHANDLE}, nil
         }
         
-        // Convert directory handle to path
         dirPath, err := s.fileSystem.FileHandleToPath(req.DirectoryHandle)
         if err != nil {
             return &api.ReadDirResponse{Status: nfs.MapErrorToStatus(err)}, nil
@@ -591,7 +548,6 @@ func (s *NFSServer) ReadDir(ctx context.Context, req *api.ReadDirRequest) (*api.
         // Get credentials
         creds := nfs.ProtoCredsToFSCreds(req.Credentials)
         
-        // Apply root squashing if enabled
         if s.config.EnableRootSquash && creds.UID == 0 {
             creds.UID = s.config.AnonUID
             creds.GID = s.config.AnonGID
@@ -602,7 +558,6 @@ func (s *NFSServer) ReadDir(ctx context.Context, req *api.ReadDirRequest) (*api.
             return &api.ReadDirResponse{Status: nfs.MapErrorToStatus(err)}, nil
         }
         
-        // Get file info to verify it's a directory
         fileInfo, err := s.fileSystem.GetAttr(ctx, dirPath)
         if err != nil {
             return &api.ReadDirResponse{Status: nfs.MapErrorToStatus(err)}, nil
@@ -660,7 +615,6 @@ func (s *NFSServer) ReadDir(ctx context.Context, req *api.ReadDirRequest) (*api.
 
 // Create implements the Create RPC method
 func (s *NFSServer) Create(ctx context.Context, req *api.CreateRequest) (*api.CreateResponse, error) {
-    // Create a unique request ID and get client address
     reqID := fmt.Sprintf("create-%d", time.Now().UnixNano())
     clientAddr := "unknown"
     if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
@@ -669,13 +623,11 @@ func (s *NFSServer) Create(ctx context.Context, req *api.CreateRequest) (*api.Cr
     
     // Process the request
     result, err := s.processRequest(ctx, "Create", reqID, clientAddr, func() (interface{}, error) {
-        // Validate directory handle
         _, err := s.validateFileHandle(req.DirectoryHandle)
         if err != nil {
             return &api.CreateResponse{Status: api.Status_ERR_BADHANDLE}, nil
         }
         
-        // Convert directory handle to path
         dirPath, err := s.fileSystem.FileHandleToPath(req.DirectoryHandle)
         if err != nil {
             return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
@@ -684,7 +636,6 @@ func (s *NFSServer) Create(ctx context.Context, req *api.CreateRequest) (*api.Cr
         // Get credentials
         creds := nfs.ProtoCredsToFSCreds(req.Credentials)
         
-        // Apply root squashing if enabled
         if s.config.EnableRootSquash && creds.UID == 0 {
             creds.UID = s.config.AnonUID
             creds.GID = s.config.AnonGID
@@ -695,7 +646,6 @@ func (s *NFSServer) Create(ctx context.Context, req *api.CreateRequest) (*api.Cr
         //     return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
         // }
         
-        // Convert requested attributes to filesystem attributes
         attr := nfs.ProtoAttributesToFSAttr(req.Attributes)
         
         // Set exclusive create flag based on mode
@@ -735,14 +685,12 @@ func (s *NFSServer) Create(ctx context.Context, req *api.CreateRequest) (*api.Cr
                     return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
                 }
                 
-                // Get directory attributes if requested
                 var dirAttrs *api.FileAttributes
                 dirInfo, err := s.fileSystem.GetAttr(ctx, dirPath)
                 if err == nil {
                     dirAttrs = nfs.FSInfoToProtoAttributes(dirInfo)
                 }
                 
-                // Create response
                 resp := &api.CreateResponse{
                     Status:        api.Status_OK,
                     FileHandle:    fileHandle,
@@ -787,7 +735,6 @@ func (s *NFSServer) Create(ctx context.Context, req *api.CreateRequest) (*api.Cr
             }, 10*time.Minute)
         }
         
-        // Return successful response
         return &api.CreateResponse{
             Status:        api.Status_OK,
             FileHandle:    fileHandle,
@@ -805,22 +752,18 @@ func (s *NFSServer) Create(ctx context.Context, req *api.CreateRequest) (*api.Cr
 
 // Mkdir implements the Mkdir RPC method
 func (s *NFSServer) Mkdir(ctx context.Context, req *api.MkdirRequest) (*api.MkdirResponse, error) {
-    // Create a unique request ID and get client address
     reqID := fmt.Sprintf("mkdir-%d", time.Now().UnixNano())
     clientAddr := "unknown"
     if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
         clientAddr = (*peer).String()
     }
     
-    // Process the request
     result, err := s.processRequest(ctx, "Mkdir", reqID, clientAddr, func() (interface{}, error) {
-        // Validate directory handle
         _, err := s.validateFileHandle(req.DirectoryHandle)
         if err != nil {
             return &api.MkdirResponse{Status: api.Status_ERR_BADHANDLE}, nil
         }
         
-        // Convert directory handle to path
         dirPath, err := s.fileSystem.FileHandleToPath(req.DirectoryHandle)
         if err != nil {
             return &api.MkdirResponse{Status: nfs.MapErrorToStatus(err)}, nil
@@ -829,7 +772,6 @@ func (s *NFSServer) Mkdir(ctx context.Context, req *api.MkdirRequest) (*api.Mkdi
         // Get credentials
         creds := nfs.ProtoCredsToFSCreds(req.Credentials)
         
-        // Apply root squashing if enabled
         if s.config.EnableRootSquash && creds.UID == 0 {
             creds.UID = s.config.AnonUID
             creds.GID = s.config.AnonGID
@@ -840,7 +782,6 @@ func (s *NFSServer) Mkdir(ctx context.Context, req *api.MkdirRequest) (*api.Mkdi
         //     return &api.MkdirResponse{Status: nfs.MapErrorToStatus(err)}, nil
         // }
         
-        // Convert requested attributes to filesystem attributes
         attr := nfs.ProtoAttributesToFSAttr(req.Attributes)
         
         // Create the directory
@@ -862,7 +803,6 @@ func (s *NFSServer) Mkdir(ctx context.Context, req *api.MkdirRequest) (*api.Mkdi
             parentAttrs = nfs.FSInfoToProtoAttributes(parentInfo)
         }
         
-        // Return successful response
         return &api.MkdirResponse{
             Status:         api.Status_OK,
             DirectoryHandle: dirHandle,
@@ -880,7 +820,6 @@ func (s *NFSServer) Mkdir(ctx context.Context, req *api.MkdirRequest) (*api.Mkdi
 
 // GetRootHandle implements the GetRootHandle RPC method
 func (s *NFSServer) GetRootHandle(ctx context.Context, req *api.GetRootHandleRequest) (*api.GetRootHandleResponse, error) {
-    // Create a unique request ID and get client address
     reqID := fmt.Sprintf("getroot-%d", time.Now().UnixNano())
     clientAddr := "unknown"
     if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
@@ -889,10 +828,8 @@ func (s *NFSServer) GetRootHandle(ctx context.Context, req *api.GetRootHandleReq
     
     // Process the request
     result, err := s.processRequest(ctx, "GetRootHandle", reqID, clientAddr, func() (interface{}, error) {
-        // Get credentials
         creds := nfs.ProtoCredsToFSCreds(req.Credentials)
         
-        // Apply root squashing if enabled
         if s.config.EnableRootSquash && creds.UID == 0 {
             creds.UID = s.config.AnonUID
             creds.GID = s.config.AnonGID
@@ -904,7 +841,6 @@ func (s *NFSServer) GetRootHandle(ctx context.Context, req *api.GetRootHandleReq
             return &api.GetRootHandleResponse{Status: nfs.MapErrorToStatus(err)}, nil
         }
         
-        // Get root directory attributes
         rootInfo, err := s.fileSystem.GetAttr(ctx, "/")
         if err != nil {
             return &api.GetRootHandleResponse{Status: nfs.MapErrorToStatus(err)}, nil
@@ -913,7 +849,6 @@ func (s *NFSServer) GetRootHandle(ctx context.Context, req *api.GetRootHandleReq
         // Convert to NFS attributes
         attrs := nfs.FSInfoToProtoAttributes(rootInfo)
         
-        // Return successful response
         return &api.GetRootHandleResponse{
             Status:     api.Status_OK,
             FileHandle: rootHandle,

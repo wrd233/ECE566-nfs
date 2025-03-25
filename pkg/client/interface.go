@@ -72,7 +72,7 @@ type NFSClient interface {
 
 type ExtendedNFSClient interface {
     NFSClient
-    // TODO 未来可能添加其他高级方法
+    // TODO: 未来可能添加其他高级方法
 }
 
 // CacheableClient extends NFSClient with cache management capabilities

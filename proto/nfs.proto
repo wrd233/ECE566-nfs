@@ -20,6 +20,9 @@ service NFSService {
   // Write to a file
   rpc Write(WriteRequest) returns (WriteResponse);
 
+  // batched write interface
+  rpc WriteBatch(WriteBatchRequest) returns (WriteBatchResponse);
+
   // Read Directory
   rpc ReadDir(ReadDirRequest) returns (ReadDirResponse);
 
@@ -92,6 +95,14 @@ message WriteResponse {
   uint32 count = 3;              // Number of bytes written
   uint32 stability = 4;          // Stability level used
   uint64 verifier = 5;           // Write verifier (used for cached writes)
+}
+
+// A batch of write requests and responses 
+message WriteBatchRequest {
+  repeated WriteRequest writes = 1; 
+}
+message WriteBatchResponse {
+  repeated WriteResponse responses = 1; 
 }
 
 // ReadDirRequest is used to list directory entries

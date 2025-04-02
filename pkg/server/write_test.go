@@ -205,7 +205,7 @@ func TestWriteStabilityPerformance(t *testing.T) {
     }
 
     // Create test parameters
-    numWrites := 100
+    numWrites := 1000
     writeSize := 1024 // 1KB per write
     creds := &api.Credentials{
         Uid:    0,

@@ -377,3 +377,37 @@ func (c *Client) LookupPath(ctx context.Context, path string) ([]byte, error) {
     
     return currentHandle, nil
 }
+
+// Commit ensures that all data for the specified file has been written to stable storage
+func (c *Client) Commit(ctx context.Context, fileHandle []byte) error {
+    req := &api.CommitRequest{
+        FileHandle: fileHandle,
+        Credentials: &api.Credentials{
+            Uid: 1000,
+            Gid: 1000,
+            Groups: []uint32{1000},
+        },
+        WriteVerifier: 0, // TODO: 现在服务器会忽略这个值，我们还没做服务器的崩溃处理
+    }
+    
+    callCtx, cancel := context.WithTimeout(ctx, c.config.Timeout)
+    defer cancel()
+    
+    var resp *api.CommitResponse
+    var err error
+    
+    err = c.callWithRetry(callCtx, "Commit", func(retryCtx context.Context) error {
+        resp, err = c.nfsClient.Commit(retryCtx, req)
+        return err
+    })
+    
+    if err != nil {
+        return fmt.Errorf("Commit RPC failed: %w", err)
+    }
+    
+    if resp.Status != api.Status_OK {
+        return StatusToError("Commit", resp.Status)
+    }
+    
+    return nil
+}

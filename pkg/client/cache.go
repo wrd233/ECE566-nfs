@@ -76,6 +76,9 @@ func (w *WriteBatchCache) Write(ctx context.Context, fileHandle []byte, offset i
 		stability = 0
 	}
 
+	cloned := make([]byte, len(data))
+	copy(cloned, data)
+
 	req := &api.WriteRequest{
 		FileHandle: fileHandle,
 		Credentials: &api.Credentials{
@@ -84,15 +87,15 @@ func (w *WriteBatchCache) Write(ctx context.Context, fileHandle []byte, offset i
 			Groups: []uint32{0},
 		},
 		Offset:    uint64(offset),
-		Data:      data,
+		Data:      cloned,
 		Stability: uint32(stability),
 	}
 
-	// w.mu.Lock()
+	w.mu.Lock()
 	w.reqs = append(w.reqs, req)
 	w.totalSize += len(data)
 	shouldFlush := w.totalSize >= w.maxSize
-	// w.mu.Unlock()
+	w.mu.Unlock()
 
 	if shouldFlush {
 		return len(data), w.FlushAll(ctx)

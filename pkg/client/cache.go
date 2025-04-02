@@ -88,11 +88,11 @@ func (w *WriteBatchCache) Write(ctx context.Context, fileHandle []byte, offset i
 		Stability: uint32(stability),
 	}
 
-	w.mu.Lock()
+	// w.mu.Lock()
 	w.reqs = append(w.reqs, req)
 	w.totalSize += len(data)
 	shouldFlush := w.totalSize >= w.maxSize
-	w.mu.Unlock()
+	// w.mu.Unlock()
 
 	if shouldFlush {
 		return len(data), w.FlushAll(ctx)

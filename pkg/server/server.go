@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 	"encoding/binary"
+	"errors"
 
 	"github.com/example/nfsserver/pkg/api"
 	"github.com/example/nfsserver/pkg/fs"
@@ -1001,4 +1002,86 @@ func (s *NFSServer) Commit(ctx context.Context, req *api.CommitRequest) (*api.Co
     }
     
     return result.(*api.CommitResponse), nil
+}
+
+// Remove implements the Remove RPC method
+func (s *NFSServer) Remove(ctx context.Context, req *api.RemoveRequest) (*api.RemoveResponse, error) {
+    // Create a unique request ID and get client address
+    reqID := fmt.Sprintf("remove-%d", time.Now().UnixNano())
+    clientAddr := "unknown"
+    if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
+        clientAddr = (*peer).String()
+    }
+
+    // Process the request
+    result, err := s.processRequest(ctx, "Remove", reqID, clientAddr, func() (interface{}, error) {
+        // Validate directory handle
+        _, err := s.validateFileHandle(req.DirectoryHandle)
+        if err != nil {
+            return &api.RemoveResponse{Status: api.Status_ERR_BADHANDLE}, nil
+        }
+
+        // Convert directory handle to path
+        dirPath, err := s.fileSystem.FileHandleToPath(req.DirectoryHandle)
+        if err != nil {
+            return &api.RemoveResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+
+        // Get credentials
+        creds := nfs.ProtoCredsToFSCreds(req.Credentials)
+
+        // Apply root squashing if enabled
+        if s.config.EnableRootSquash && creds.UID == 0 {
+            creds.UID = s.config.AnonUID
+            creds.GID = s.config.AnonGID
+        }
+
+        // Check write and execute permissions on parent directory
+        if err := s.fileSystem.Access(ctx, dirPath, fs.FileMode(2|1), creds); err != nil { // 2=write, 1=execute
+            return &api.RemoveResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+
+        // Construct the full path for the file to remove
+        filePath := filepath.Join(dirPath, req.Name)
+
+        // Get file attributes to check if it's a directory
+        fileInfo, err := s.fileSystem.GetAttr(ctx, filePath)
+        if err != nil {
+            // If file doesn't exist, return specific error
+            if errors.Is(err, fs.ErrNotExist) {
+                return &api.RemoveResponse{Status: api.Status_ERR_NOENT}, nil
+            }
+            return &api.RemoveResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+
+        // We can't use Remove for directories, only files
+        if fileInfo.Type == fs.FileTypeDirectory {
+            return &api.RemoveResponse{Status: api.Status_ERR_ISDIR}, nil
+        }
+
+        // Remove the file
+        err = s.fileSystem.Remove(ctx, filePath)
+        if err != nil {
+            return &api.RemoveResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+
+        // Get updated directory attributes
+        var dirAttrs *api.FileAttributes
+        dirInfo, err := s.fileSystem.GetAttr(ctx, dirPath)
+        if err == nil {
+            dirAttrs = nfs.FSInfoToProtoAttributes(dirInfo)
+        }
+
+        // Return successful response
+        return &api.RemoveResponse{
+            Status:        api.Status_OK,
+            DirAttributes: dirAttrs,
+        }, nil
+    })
+
+    if err != nil {
+        return nil, err
+    }
+
+    return result.(*api.RemoveResponse), nil
 }

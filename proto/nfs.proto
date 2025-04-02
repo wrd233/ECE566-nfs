@@ -37,6 +37,9 @@ service NFSService {
 
   // Commit ensures all data for a file has been written to stable storage
   rpc Commit(CommitRequest) returns (CommitResponse);
+
+  // Remove a file
+  rpc Remove(RemoveRequest) returns (RemoveResponse);
 }
 
 // GetAttrRequest is used to get file attributes
@@ -194,4 +197,17 @@ message CommitRequest {
 // CommitResponse contains the result of a commit operation
 message CommitResponse {
   Status status = 1;          // Result status
+}
+
+// RemoveRequest is used to remove a file
+message RemoveRequest {
+  bytes directory_handle = 1;     // Directory handle containing the file
+  string name = 2;                // Name of the file to remove
+  Credentials credentials = 3;     // Authentication credentials
+}
+
+// RemoveResponse contains the result of a Remove operation
+message RemoveResponse {
+  Status status = 1;                // Result status
+  FileAttributes dir_attributes = 2; // Directory attributes after removal (optional)
 }

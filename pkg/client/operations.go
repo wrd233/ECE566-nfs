@@ -428,3 +428,46 @@ func (c *Client) LookupPath(ctx context.Context, path string) ([]byte, error) {
 
 	return currentHandle, nil
 }
+
+
+// Commit ensures data written to file is stored to stable storage
+func (c *Client) Commit(ctx context.Context, fileHandle []byte) error {
+    // Create request
+    req := &api.CommitRequest{
+        FileHandle: fileHandle,
+        Credentials: &api.Credentials{
+            Uid: 1000,
+            Gid: 1000,
+            Groups: []uint32{1000},
+        },
+    }
+    
+    // Create a context with timeout
+    callCtx, cancel := context.WithTimeout(ctx, c.config.Timeout)
+    defer cancel()
+    
+    // Call the RPC method with retry logic
+    var resp *api.CommitResponse
+    var err error
+    
+    err = c.callWithRetry(callCtx, "Commit", func(retryCtx context.Context) error {
+        resp, err = c.nfsClient.Commit(retryCtx, req)
+        return err
+    })
+    
+    if err != nil {
+        return fmt.Errorf("Commit RPC failed: %w", err)
+    }
+    
+    // Check the status
+    if resp.Status != api.Status_OK {
+        // If the server reports ERR_NOT_SYNC, it means the server restarted
+        // In a full implementation, we would resend pending writes
+        if resp.Status == api.Status_ERR_NOT_SYNC {
+            return fmt.Errorf("server restarted, verifier mismatch")
+        }
+        return StatusToError("Commit", resp.Status)
+    }
+    
+    return nil
+}

@@ -98,8 +98,21 @@ func (f *File) Write(ctx context.Context, req *fuse.WriteRequest, resp *fuse.Wri
 // Flush implements the Flush method for FUSE files
 func (f *File) Flush(ctx context.Context, req *fuse.FlushRequest) error {
 	log.Printf("Flushing file: %s", f.path)
-	// In our implementation, writes are already synced to the server
-	// with FILE_SYNC stability, so we don't need additional action here
+
+	// Flush all cached writes
+	err := f.fs.client.FlushAll(ctx)
+	if err != nil {
+		log.Printf("Fsync flush failed: %v", err)
+		return fuse.EIO
+	}
+
+    // Call Commit to ensure data is persisted
+    err = f.fs.client.Commit(ctx, f.handle)
+    if err != nil {
+        log.Printf("Commit failed: %v", err)
+        return fuse.EIO
+    }
+
 	return nil
 }
 
@@ -113,6 +126,13 @@ func (f *File) Fsync(ctx context.Context, req *fuse.FsyncRequest) error {
 		return fuse.EIO
 	}
 
+	// Call Commit to ensure data is persisted
+	err = f.fs.client.Commit(ctx, f.handle)
+	if err != nil {
+		log.Printf("Commit failed: %v", err)
+		return fuse.EIO
+	}
+
 	return nil
 }
 
@@ -122,6 +142,13 @@ func (f *File) Release(ctx context.Context, req *fuse.ReleaseRequest) error {
 	err := f.fs.client.FlushAll(ctx)
 	if err != nil {
 		log.Printf("Release flush failed: %v", err)
+		return fuse.EIO
+	}
+
+	// Call Commit to ensure data is persisted
+	err = f.fs.client.Commit(ctx, f.handle)
+	if err != nil {
+		log.Printf("Commit failed: %v", err)
 		return fuse.EIO
 	}
 

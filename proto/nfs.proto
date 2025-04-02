@@ -31,6 +31,9 @@ service NFSService {
 
   // GetRootHandle returns the file handle for the root directory
   rpc GetRootHandle(GetRootHandleRequest) returns (GetRootHandleResponse);
+
+  // Commit ensures all data for a file has been written to stable storage
+  rpc Commit(CommitRequest) returns (CommitResponse);
 }
 
 // GetAttrRequest is used to get file attributes
@@ -169,4 +172,17 @@ message GetRootHandleResponse {
   Status status = 1;
   bytes file_handle = 2;
   FileAttributes attributes = 3;
+}
+
+// CommitRequest is used to ensure data has been written to stable storage
+message CommitRequest {
+  bytes file_handle = 1;      // File handle
+  Credentials credentials = 2; // Authentication credentials
+  uint64 write_verifier = 3;  // Verifier from previous write operation
+}
+
+// CommitResponse contains the result of a commit operation
+message CommitResponse {
+  Status status = 1;          // Result status
+  uint64 verifier = 2;        // Current server write verifier
 }

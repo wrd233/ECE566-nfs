@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"hash/crc32"
     "syscall"
+    "encoding/binary"
 
 	"github.com/example/nfsserver/pkg/api"
 	"github.com/example/nfsserver/pkg/fs"
@@ -65,6 +66,9 @@ type NFSServer struct {
 
 	// Worker pool for limiting concurrent requests
 	workerPool chan struct{}
+
+    // Write verifier used for commit
+    writeVerifier uint64
 }
 
 // NewNFSServer creates a new NFS server
@@ -78,6 +82,15 @@ func NewNFSServer(config *Config, fileSystem fs.FileSystem) (*NFSServer, error) 
 	// Create worker pool for controlling concurrency
 	workerPool := make(chan struct{}, config.MaxConcurrent)
 
+    // Generate a unique write verifier
+    var verifier uint64
+    binary.Read(rand.Reader, binary.BigEndian, &verifier)
+    
+    // If random source fails, use time and process ID
+    if verifier == 0 {
+        verifier = uint64(time.Now().UnixNano())
+    }
+
 	return &NFSServer{
 		config:      config,
 		fileSystem:  fileSystem,
@@ -85,6 +98,7 @@ func NewNFSServer(config *Config, fileSystem fs.FileSystem) (*NFSServer, error) 
 		reqCache:    make(map[string]interface{}),
 		reqCacheTTL: time.Duration(2) * time.Minute,
 		workerPool:  workerPool,
+        writeVerifier: verifier,
 	}, nil
 }
 
@@ -464,9 +478,6 @@ func (s *NFSServer) Write(ctx context.Context, req *api.WriteRequest) (*api.Writ
             return &api.WriteResponse{Status: nfs.MapErrorToStatus(err)}, nil
         }
         
-        // Generate write verifier (timestamp-based for simplicity)
-        verifier := uint64(time.Now().UnixNano())
-        
         // Sync to disk if requested
         if req.Stability == 1 { // DATA_SYNC = 1
             // For DATA_SYNC, we need to ensure the data is on stable storage
@@ -483,7 +494,7 @@ func (s *NFSServer) Write(ctx context.Context, req *api.WriteRequest) (*api.Writ
             Status:     api.Status_OK,
             Count:      uint32(bytesWritten),
             Stability:  req.Stability, // Return the same stability level that was requested
-            Verifier:   verifier,
+            Verifier:   s.writeVerifier,
             Attributes: attrs,
         }
         
@@ -861,4 +872,56 @@ func (s *NFSServer) GetRootHandle(ctx context.Context, req *api.GetRootHandleReq
     }
     
     return result.(*api.GetRootHandleResponse), nil
+}
+
+// Commit implements the Commit RPC method
+func (s *NFSServer) Commit(ctx context.Context, req *api.CommitRequest) (*api.CommitResponse, error) {
+    // Create a unique request ID and get client address
+    reqID := fmt.Sprintf("commit-%d", time.Now().UnixNano())
+    clientAddr := "unknown"
+    if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
+        clientAddr = (*peer).String()
+    }
+    
+    // Process the request
+    result, err := s.processRequest(ctx, "Commit", reqID, clientAddr, func() (interface{}, error) {
+        // Validate file handle
+        _, err := s.validateFileHandle(req.FileHandle)
+        if err != nil {
+            return &api.CommitResponse{Status: api.Status_ERR_BADHANDLE}, nil
+        }
+        
+        // Convert file handle to path
+        path, err := s.fileSystem.FileHandleToPath(req.FileHandle)
+        if err != nil {
+            return &api.CommitResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Check if verifier matches
+        if req.WriteVerifier != s.writeVerifier {
+            // Verifier doesn't match, server may have restarted
+            return &api.CommitResponse{
+                Status:   api.Status_ERR_NOT_SYNC,
+                Verifier: s.writeVerifier,
+            }, nil
+        }
+        
+        // Commit data to stable storage
+        err = s.fileSystem.Commit(ctx, path)
+        if err != nil {
+            return &api.CommitResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
+        
+        // Return successful response
+        return &api.CommitResponse{
+            Status:   api.Status_OK,
+            Verifier: s.writeVerifier,
+        }, nil
+    })
+    
+    if err != nil {
+        return nil, err
+    }
+    
+    return result.(*api.CommitResponse), nil
 }

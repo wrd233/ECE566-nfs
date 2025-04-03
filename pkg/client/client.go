@@ -65,6 +65,8 @@ type Client struct {
 	// TODO: Add attribute cache when implemented
 	// attrCache *AttrCache
 	writeCache *WriteBatchCache
+
+	useCache bool
 }
 
 // NewClient creates a new NFS client
@@ -102,6 +104,7 @@ func NewClient(config *Config) (NFSClient, error) {
 		config:      config,
 		handleCache: handleCache,
 		writeCache:  writeCache,
+		useCache:    false,
 	}
 	writeCache.client = client
 	return client, nil

@@ -77,7 +77,7 @@ func (f *File) Write(ctx context.Context, req *fuse.WriteRequest, resp *fuse.Wri
 
 	// Use NFS client to write the data
 	// Use FILE_SYNC stability level (2) for safety
-	count, err := f.fs.client.Write(ctx, f.handle, req.Offset, req.Data, 2)
+	count, err := f.fs.client.Write(ctx, f.handle, req.Offset, req.Data, 0)
 	if err != nil {
 		log.Printf("Write failed: %v", err)
 		return fuse.EIO
@@ -106,12 +106,12 @@ func (f *File) Flush(ctx context.Context, req *fuse.FlushRequest) error {
 		return fuse.EIO
 	}
 
-    // Call Commit to ensure data is persisted
-    err = f.fs.client.Commit(ctx, f.handle)
-    if err != nil {
-        log.Printf("Commit failed: %v", err)
-        return fuse.EIO
-    }
+	// Call Commit to ensure data is persisted
+	err = f.fs.client.Commit(ctx, f.handle)
+	if err != nil {
+		log.Printf("Commit failed: %v", err)
+		return fuse.EIO
+	}
 
 	return nil
 }

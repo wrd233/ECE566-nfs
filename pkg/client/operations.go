@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 	"time"
@@ -139,8 +140,15 @@ func (c *Client) Read(ctx context.Context, fileHandle []byte, offset int64, coun
 	return resp.Data, resp.Eof, nil
 }
 
+func (c *Client) EnableWriteCache(enable bool) {
+	c.useCache = enable
+}
+
 func (c *Client) Write(ctx context.Context, fileHandle []byte, offset int64, data []byte, stability int) (int, error) {
-	return c.writeCache.Write(ctx, fileHandle, offset, data, stability)
+	if c.useCache {
+		return c.writeCache.Write(ctx, fileHandle, offset, data, stability)
+	}
+	return c.DirectWrite(ctx, fileHandle, offset, data, stability)
 }
 
 func (c *Client) FlushAll(ctx context.Context) error {
@@ -148,55 +156,55 @@ func (c *Client) FlushAll(ctx context.Context) error {
 }
 
 // // Write writes data to a file
-// func (c *Client) Write(ctx context.Context, fileHandle []byte, offset int64, data []byte, stability int) (int, error) {
-// 	// Validate stability level
-// 	if stability < 0 || stability > 2 {
-// 		stability = 0 // Default to UNSTABLE if invalid
-// 	}
+func (c *Client) DirectWrite(ctx context.Context, fileHandle []byte, offset int64, data []byte, stability int) (int, error) {
+	// Validate stability level
+	if stability < 0 || stability > 2 {
+		stability = 0 // Default to UNSTABLE if invalid
+	}
 
-// 	// Create request
-// 	req := &api.WriteRequest{
-// 		FileHandle: fileHandle,
-// 		Credentials: &api.Credentials{
-// 			Uid:    0,
-// 			Gid:    0,
-// 			Groups: []uint32{0},
-// 		},
-// 		Offset:    uint64(offset),
-// 		Data:      data,
-// 		Stability: uint32(stability),
-// 	}
+	// Create request
+	req := &api.WriteRequest{
+		FileHandle: fileHandle,
+		Credentials: &api.Credentials{
+			Uid:    0,
+			Gid:    0,
+			Groups: []uint32{0},
+		},
+		Offset:    uint64(offset),
+		Data:      data,
+		Stability: uint32(stability),
+	}
 
-// 	// Create a context with timeout
-// 	callCtx, cancel := context.WithTimeout(ctx, c.config.Timeout)
-// 	defer cancel()
+	// Create a context with timeout
+	callCtx, cancel := context.WithTimeout(ctx, c.config.Timeout)
+	defer cancel()
 
-// 	// Call the RPC method with retry logic
-// 	var resp *api.WriteResponse
-// 	var err error
+	// Call the RPC method with retry logic
+	var resp *api.WriteResponse
+	var err error
 
-// 	err = c.callWithRetry(callCtx, "Write", func(retryCtx context.Context) error {
-// 		resp, err = c.nfsClient.Write(retryCtx, req)
-// 		return err
-// 	})
+	err = c.callWithRetry(callCtx, "Write", func(retryCtx context.Context) error {
+		resp, err = c.nfsClient.Write(retryCtx, req)
+		return err
+	})
 
-// 	if err != nil {
-// 		return 0, fmt.Errorf("Write RPC failed: %w", err)
-// 	}
+	if err != nil {
+		return 0, fmt.Errorf("Write RPC failed: %w", err)
+	}
 
-// 	// Check the status
-// 	if resp.Status != api.Status_OK {
-// 		return 0, StatusToError("Write", resp.Status)
-// 	}
+	// Check the status
+	if resp.Status != api.Status_OK {
+		return 0, StatusToError("Write", resp.Status)
+	}
 
-// 	// If server used different stability than requested, log a warning
-// 	if resp.Stability != uint32(stability) {
-// 		log.Printf("Warning: Server used different stability level than requested (req: %d, used: %d)",
-// 			stability, resp.Stability)
-// 	}
+	// If server used different stability than requested, log a warning
+	if resp.Stability != uint32(stability) {
+		log.Printf("Warning: Server used different stability level than requested (req: %d, used: %d)",
+			stability, resp.Stability)
+	}
 
-// 	return int(resp.Count), nil
-// }
+	return int(resp.Count), nil
+}
 
 // ReadDir reads the contents of a directory
 func (c *Client) ReadDir(ctx context.Context, dirHandle []byte) ([]*api.DirEntry, error) {
@@ -429,45 +437,44 @@ func (c *Client) LookupPath(ctx context.Context, path string) ([]byte, error) {
 	return currentHandle, nil
 }
 
-
 // Commit ensures data written to file is stored to stable storage
 func (c *Client) Commit(ctx context.Context, fileHandle []byte) error {
-    // Create request
-    req := &api.CommitRequest{
-        FileHandle: fileHandle,
-        Credentials: &api.Credentials{
-            Uid: 1000,
-            Gid: 1000,
-            Groups: []uint32{1000},
-        },
-    }
-    
-    // Create a context with timeout
-    callCtx, cancel := context.WithTimeout(ctx, c.config.Timeout)
-    defer cancel()
-    
-    // Call the RPC method with retry logic
-    var resp *api.CommitResponse
-    var err error
-    
-    err = c.callWithRetry(callCtx, "Commit", func(retryCtx context.Context) error {
-        resp, err = c.nfsClient.Commit(retryCtx, req)
-        return err
-    })
-    
-    if err != nil {
-        return fmt.Errorf("Commit RPC failed: %w", err)
-    }
-    
-    // Check the status
-    if resp.Status != api.Status_OK {
-        // If the server reports ERR_NOT_SYNC, it means the server restarted
-        // In a full implementation, we would resend pending writes
-        if resp.Status == api.Status_ERR_NOT_SYNC {
-            return fmt.Errorf("server restarted, verifier mismatch")
-        }
-        return StatusToError("Commit", resp.Status)
-    }
-    
-    return nil
+	// Create request
+	req := &api.CommitRequest{
+		FileHandle: fileHandle,
+		Credentials: &api.Credentials{
+			Uid:    1000,
+			Gid:    1000,
+			Groups: []uint32{1000},
+		},
+	}
+
+	// Create a context with timeout
+	callCtx, cancel := context.WithTimeout(ctx, c.config.Timeout)
+	defer cancel()
+
+	// Call the RPC method with retry logic
+	var resp *api.CommitResponse
+	var err error
+
+	err = c.callWithRetry(callCtx, "Commit", func(retryCtx context.Context) error {
+		resp, err = c.nfsClient.Commit(retryCtx, req)
+		return err
+	})
+
+	if err != nil {
+		return fmt.Errorf("Commit RPC failed: %w", err)
+	}
+
+	// Check the status
+	if resp.Status != api.Status_OK {
+		// If the server reports ERR_NOT_SYNC, it means the server restarted
+		// In a full implementation, we would resend pending writes
+		if resp.Status == api.Status_ERR_NOT_SYNC {
+			return fmt.Errorf("server restarted, verifier mismatch")
+		}
+		return StatusToError("Commit", resp.Status)
+	}
+
+	return nil
 }

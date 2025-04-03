@@ -140,10 +140,6 @@ func (c *Client) Read(ctx context.Context, fileHandle []byte, offset int64, coun
 	return resp.Data, resp.Eof, nil
 }
 
-func (c *Client) EnableWriteCache(enable bool) {
-	c.useCache = enable
-}
-
 func (c *Client) Write(ctx context.Context, fileHandle []byte, offset int64, data []byte, stability int) (int, error) {
 	if c.useCache {
 		return c.writeCache.Write(ctx, fileHandle, offset, data, stability)

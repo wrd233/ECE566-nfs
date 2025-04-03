@@ -68,11 +68,13 @@ type NFSClient interface {
 	// LookupPath resolves a file path to a file handle, starting from the root
 	LookupPath(ctx context.Context, path string) ([]byte, error)
 
-    // Commit ensures all data written to file is committed to stable storage
-    // Returns any error encountered
+	// Commit ensures all data written to file is committed to stable storage
+	// Returns any error encountered
 	Commit(ctx context.Context, fileHandle []byte) error
 
 	FlushAll(ctx context.Context) error
+
+	DirectWrite(ctx context.Context, fileHandle []byte, offset int64, data []byte, stability int) (int, error)
 }
 
 type ExtendedNFSClient interface {

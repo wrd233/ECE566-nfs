@@ -117,7 +117,7 @@ func (w *WriteBatchCache) FlushAll(ctx context.Context) error {
 		return nil
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	callCtx, cancel := context.WithTimeout(ctx, 100*time.Second)
 	defer cancel()
 
 	_, err := w.client.nfsClient.WriteBatch(callCtx, &api.WriteBatchRequest{

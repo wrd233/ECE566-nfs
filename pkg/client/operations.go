@@ -324,12 +324,6 @@ func (c *Client) Mkdir(ctx context.Context, dirHandle []byte, name string, attrs
 	return resp.DirectoryHandle, resp.Attributes, nil
 }
 
-// Remove removes a file
-func (c *Client) Remove(ctx context.Context, dirHandle []byte, name string) error {
-	// TODO: Implement actual Remove operation
-	return fmt.Errorf("not implemented")
-}
-
 // Rmdir removes a directory
 func (c *Client) Rmdir(ctx context.Context, dirHandle []byte, name string) error {
 	// TODO: Implement actual Rmdir operation
@@ -467,6 +461,41 @@ func (c *Client) Commit(ctx context.Context, fileHandle []byte) error {
             return fmt.Errorf("server restarted, verifier mismatch")
         }
         return StatusToError("Commit", resp.Status)
+    }
+    
+    return nil
+}
+
+
+// Remove removes a file
+func (c *Client) Remove(ctx context.Context, dirHandle []byte, name string) error {
+    req := &api.RemoveRequest{
+        DirectoryHandle: dirHandle,
+        Name:            name,
+        Credentials: &api.Credentials{
+            Uid: 1000,
+            Gid: 1000,
+            Groups: []uint32{1000},
+        },
+    }
+    
+    callCtx, cancel := context.WithTimeout(ctx, c.config.Timeout)
+    defer cancel()
+    
+    var resp *api.RemoveResponse
+    var err error
+    
+    err = c.callWithRetry(callCtx, "Remove", func(retryCtx context.Context) error {
+        resp, err = c.nfsClient.Remove(retryCtx, req)
+        return err
+    })
+    
+    if err != nil {
+        return fmt.Errorf("Remove RPC failed: %w", err)
+    }
+    
+    if resp.Status != api.Status_OK {
+        return StatusToError("Remove", resp.Status)
     }
     
     return nil

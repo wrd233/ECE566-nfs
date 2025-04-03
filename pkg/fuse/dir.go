@@ -159,3 +159,17 @@ func (d *Dir) Mkdir(ctx context.Context, req *fuse.MkdirRequest) (fs.Node, error
     
     return dir, nil
 }
+
+// Remove implements the Remove method for FUSE directories
+func (d *Dir) Remove(ctx context.Context, req *fuse.RemoveRequest) error {
+    log.Printf("Removing %s from directory %s", req.Name, d.path)
+    
+    // Call the NFS client Remove method
+    err := d.fs.client.Remove(ctx, d.handle, req.Name)
+    if err != nil {
+        log.Printf("Remove failed: %v", err)
+        return fuse.EIO
+    }
+    
+    return nil
+}

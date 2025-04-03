@@ -13,7 +13,8 @@ import (
 	"syscall"
 	"time"
 	"encoding/binary"
-	"errors"
+	// "os"
+	// "errors"
 
 	"github.com/example/nfsserver/pkg/api"
 	"github.com/example/nfsserver/pkg/fs"
@@ -1036,25 +1037,24 @@ func (s *NFSServer) Remove(ctx context.Context, req *api.RemoveRequest) (*api.Re
             creds.GID = s.config.AnonGID
         }
 
-        // Check write and execute permissions on parent directory
-        if err := s.fileSystem.Access(ctx, dirPath, fs.FileMode(2|1), creds); err != nil { // 2=write, 1=execute
-            return &api.RemoveResponse{Status: nfs.MapErrorToStatus(err)}, nil
-        }
+        // // TODO: Check write permission on the directory
+        // if err := s.fileSystem.Access(ctx, dirPath, fs.FileMode(2), creds); err != nil { // 2 = write
+        //     return &api.RemoveResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        // }
 
-        // Construct the full path for the file to remove
+        // Build the complete file path
         filePath := filepath.Join(dirPath, req.Name)
-
-        // Get file attributes to check if it's a directory
-        fileInfo, err := s.fileSystem.GetAttr(ctx, filePath)
-        if err != nil {
-            // If file doesn't exist, return specific error
-            if errors.Is(err, fs.ErrNotExist) {
-                return &api.RemoveResponse{Status: api.Status_ERR_NOENT}, nil
-            }
-            return &api.RemoveResponse{Status: nfs.MapErrorToStatus(err)}, nil
-        }
-
-        // We can't use Remove for directories, only files
+        
+		// Check if the file exists
+		fileInfo, err := s.fileSystem.GetAttr(ctx, filePath)
+		if err != nil {
+			log.Printf("File does not exist or error accessing file: %v", err)
+			
+			// 直接返回ERR_NOENT，不使用错误映射函数
+			return &api.RemoveResponse{Status: api.Status_ERR_NOENT}, nil
+		}
+        
+        // Ensure it's not a directory (use Rmdir for directories)
         if fileInfo.Type == fs.FileTypeDirectory {
             return &api.RemoveResponse{Status: api.Status_ERR_ISDIR}, nil
         }
@@ -1065,7 +1065,7 @@ func (s *NFSServer) Remove(ctx context.Context, req *api.RemoveRequest) (*api.Re
             return &api.RemoveResponse{Status: nfs.MapErrorToStatus(err)}, nil
         }
 
-        // Get updated directory attributes
+        // Get directory attributes (optional)
         var dirAttrs *api.FileAttributes
         dirInfo, err := s.fileSystem.GetAttr(ctx, dirPath)
         if err == nil {

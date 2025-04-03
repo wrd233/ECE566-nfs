@@ -104,7 +104,7 @@ func NewClient(config *Config) (NFSClient, error) {
 		config:      config,
 		handleCache: handleCache,
 		writeCache:  writeCache,
-		useCache:    false,
+		useCache:    true,
 	}
 	writeCache.client = client
 	return client, nil

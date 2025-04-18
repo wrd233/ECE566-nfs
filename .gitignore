@@ -21,3 +21,5 @@ bin/
 .vscode/
 *.swp
 *.swo
+
+/exports/

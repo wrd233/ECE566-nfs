@@ -13,16 +13,22 @@ import (
 // Ensure Client implements NFSClient interface
 var _ NFSClient = (*Client)(nil)
 
+
+// Helper function to create default credentials
+func (c *Client) defaultCredentials() *api.Credentials {
+    return &api.Credentials{
+        Uid:    1000,
+        Gid:    1000,
+        Groups: []uint32{1000},
+    }
+}
+
 // GetAttr retrieves attributes for a file or directory
 func (c *Client) GetAttr(ctx context.Context, fileHandle []byte) (*api.FileAttributes, error) {
 	// Create request
 	req := &api.GetAttrRequest{
 		FileHandle: fileHandle,
-		Credentials: &api.Credentials{
-			Uid:    1000,
-			Gid:    1000,
-			Groups: []uint32{1000},
-		},
+		Credentials: c.defaultCredentials(),
 	}
 
 	// Create a context with timeout
@@ -56,11 +62,7 @@ func (c *Client) Lookup(ctx context.Context, dirHandle []byte, name string) ([]b
 	req := &api.LookupRequest{
 		DirectoryHandle: dirHandle,
 		Name:            name,
-		Credentials: &api.Credentials{
-			Uid:    1000,
-			Gid:    1000,
-			Groups: []uint32{1000},
-		},
+		Credentials: c.defaultCredentials(),
 	}
 
 	// Create a context with timeout
@@ -105,11 +107,7 @@ func (c *Client) Read(ctx context.Context, fileHandle []byte, offset int64, coun
 	// Create request
 	req := &api.ReadRequest{
 		FileHandle: fileHandle,
-		Credentials: &api.Credentials{
-			Uid:    1000,
-			Gid:    1000,
-			Groups: []uint32{1000},
-		},
+		Credentials: c.defaultCredentials(),
 		Offset: uint64(offset),
 		Count:  uint32(count),
 	}
@@ -152,10 +150,7 @@ func (c *Client) ReadDir(ctx context.Context, dirHandle []byte) ([]*api.DirEntry
 	// Create the request
 	req := &api.ReadDirRequest{
 		DirectoryHandle: dirHandle,
-		Credentials: &api.Credentials{
-			Uid: 1000,
-			Gid: 1000,
-		},
+		Credentials: c.defaultCredentials(),
 		Cookie:         0,
 		CookieVerifier: 0,
 		Count:          1000, // Request up to 1000 entries
@@ -192,11 +187,7 @@ func (c *Client) Create(ctx context.Context, dirHandle []byte, name string, attr
 	req := &api.CreateRequest{
 		DirectoryHandle: dirHandle,
 		Name:            name,
-		Credentials: &api.Credentials{
-			Uid:    1000,
-			Gid:    1000,
-			Groups: []uint32{1000},
-		},
+		Credentials: c.defaultCredentials(),
 		Attributes: attrs,
 		Mode:       mode,
 		Verifier:   uint64(time.Now().UnixNano()), // Use current time as verifier
@@ -240,11 +231,7 @@ func (c *Client) Mkdir(ctx context.Context, dirHandle []byte, name string, attrs
 	req := &api.MkdirRequest{
 		DirectoryHandle: dirHandle,
 		Name:            name,
-		Credentials: &api.Credentials{
-			Uid:    1000,
-			Gid:    1000,
-			Groups: []uint32{1000},
-		},
+		Credentials: c.defaultCredentials(),
 		Attributes: attrs,
 	}
 
@@ -289,11 +276,7 @@ func (c *Client) Rename(ctx context.Context, fromDirHandle []byte, fromName stri
 func (c *Client) GetRootFileHandle(ctx context.Context) ([]byte, error) {
 	// Create request
 	req := &api.GetRootHandleRequest{
-		Credentials: &api.Credentials{
-			Uid:    1000,
-			Gid:    1000,
-			Groups: []uint32{1000},
-		},
+		Credentials:c.defaultCredentials(),
 	}
 
 	// Create a context with timeout
@@ -377,11 +360,7 @@ func (c *Client) Commit(ctx context.Context, fileHandle []byte) error {
 	// Create request
 	req := &api.CommitRequest{
 		FileHandle: fileHandle,
-		Credentials: &api.Credentials{
-			Uid:    1000,
-			Gid:    1000,
-			Groups: []uint32{1000},
-		},
+		Credentials: c.defaultCredentials(),
 	}
 
 	// Create a context with timeout
@@ -419,11 +398,7 @@ func (c *Client) Remove(ctx context.Context, dirHandle []byte, name string) erro
 	req := &api.RemoveRequest{
 		DirectoryHandle: dirHandle,
 		Name:            name,
-		Credentials: &api.Credentials{
-			Uid:    1000,
-			Gid:    1000,
-			Groups: []uint32{1000},
-		},
+		Credentials: c.defaultCredentials(),
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, c.config.Timeout)

@@ -62,8 +62,6 @@ type Client struct {
 	// File handle cache
 	handleCache *HandleCache
 
-	// TODO: Add attribute cache when implemented
-	// attrCache *AttrCache
 	writeCache *WriteBatchCache
 }
 

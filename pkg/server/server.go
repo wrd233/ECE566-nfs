@@ -207,247 +207,190 @@ func (s *NFSServer) validateFileHandle(handle []byte) ([]byte, error) {
 
 // GetAttr implements the GetAttr RPC method
 func (s *NFSServer) GetAttr(ctx context.Context, req *api.GetAttrRequest) (*api.GetAttrResponse, error) {
-	// Create a unique request ID and get client address
-	reqID := fmt.Sprintf("getattr-%d", time.Now().UnixNano())
-	clientAddr := "unknown"
-	if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
-		clientAddr = (*peer).String()
-	}
+    // Create request context
+    reqCtx := s.newRequestContext(ctx, "GetAttr", req)
+    
+    // Process the request
+    result, err := s.processRequest(ctx, reqCtx.Operation, reqCtx.ID, reqCtx.ClientAddr, func() (interface{}, error) {
+        // Process file handle
+        handleCtx, status, err := s.prepareFileHandle(ctx, req.FileHandle, req.Credentials)
+        if status != api.Status_OK {
+            return &api.GetAttrResponse{Status: status}, nil
+        }
+        
+        // Check read permission
+        status, err = s.checkAccess(ctx, handleCtx.Path, fs.FileMode(4), handleCtx.Creds) // 4 = read
+        if status != api.Status_OK {
+            return &api.GetAttrResponse{Status: status}, nil
+        }
 
-	// Process the request
-	result, err := s.processRequest(ctx, "GetAttr", reqID, clientAddr, func() (interface{}, error) {
-		// Validate file handle
-		_, err := s.validateFileHandle(req.FileHandle)
-		if err != nil {
-			return &api.GetAttrResponse{Status: api.Status_ERR_BADHANDLE}, nil
-		}
+        // Get file attributes
+        fileInfo, err := s.fileSystem.GetAttr(ctx, handleCtx.Path)
+        if err != nil {
+            return &api.GetAttrResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
 
-		// Convert file handle to path
-		path, err := s.fileSystem.FileHandleToPath(req.FileHandle)
-		if err != nil {
-			return &api.GetAttrResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
+        // Convert to NFS attributes
+        attrs := nfs.FSInfoToProtoAttributes(fileInfo)
 
-		// Get credentials
-		creds := nfs.ProtoCredsToFSCreds(req.Credentials)
+        // Return successful response
+        return &api.GetAttrResponse{
+            Status:     api.Status_OK,
+            Attributes: attrs,
+        }, nil
+    })
 
-		// Apply root squashing if enabled
-		if s.config.EnableRootSquash && creds.UID == 0 {
-			creds.UID = s.config.AnonUID
-			creds.GID = s.config.AnonGID
-		}
+    if err != nil {
+        return nil, err
+    }
 
-		// Check read permission
-		if err := s.fileSystem.Access(ctx, path, fs.FileMode(4), creds); err != nil {
-			return &api.GetAttrResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
-
-		// Get file attributes
-		fileInfo, err := s.fileSystem.GetAttr(ctx, path)
-		if err != nil {
-			return &api.GetAttrResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
-
-		// Convert to NFS attributes
-		attrs := nfs.FSInfoToProtoAttributes(fileInfo)
-
-		// Return successful response
-		response := &api.GetAttrResponse{
-			Status:     api.Status_OK,
-			Attributes: attrs,
-		}
-
-		log.Printf("Sending response: %+v", response)
-		return response, nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return result.(*api.GetAttrResponse), nil
+    return result.(*api.GetAttrResponse), nil
 }
 
 // Lookup implements the Lookup RPC method
 func (s *NFSServer) Lookup(ctx context.Context, req *api.LookupRequest) (*api.LookupResponse, error) {
-	// Create a unique request ID and get client address
-	reqID := fmt.Sprintf("lookup-%d", time.Now().UnixNano())
-	clientAddr := "unknown"
-	if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
-		clientAddr = (*peer).String()
-	}
+    // Create request context
+    reqCtx := s.newRequestContext(ctx, "Lookup", req)
+    
+    // Process the request
+    result, err := s.processRequest(ctx, reqCtx.Operation, reqCtx.ID, reqCtx.ClientAddr, func() (interface{}, error) {
+        // Process directory handle
+        handleCtx, status, err := s.prepareFileHandle(ctx, req.DirectoryHandle, req.Credentials)
+        if status != api.Status_OK {
+            return &api.LookupResponse{Status: status}, nil
+        }
+        
+        // Check directory access permission
+        status, err = s.checkAccess(ctx, handleCtx.Path, fs.FileMode(5), handleCtx.Creds) // 5 = read + execute
+        if status != api.Status_OK {
+            return &api.LookupResponse{Status: status}, nil
+        }
 
-	// Process the request
-	result, err := s.processRequest(ctx, "Lookup", reqID, clientAddr, func() (interface{}, error) {
-		// Validate directory handle
-		_, err := s.validateFileHandle(req.DirectoryHandle)
-		if err != nil {
-			return &api.LookupResponse{Status: api.Status_ERR_BADHANDLE}, nil
-		}
+        // Handle special directory entries
+        targetPath := ""
+        switch req.Name {
+        case ".":
+            targetPath = handleCtx.Path
+        case "..":
+            // For parent directory, find the actual parent
+            if handleCtx.Path == "/" {
+                // Root directory has itself as parent
+                targetPath = "/"
+            } else {
+                // Get parent directory path
+                targetPath = filepath.Dir(handleCtx.Path)
+                if targetPath == "." {
+                    targetPath = "/"
+                }
+            }
+        default:
+            // Look up the file in the directory
+            targetPath, _, err = s.fileSystem.Lookup(ctx, handleCtx.Path, req.Name)
+            if err != nil {
+                return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
+            }
+        }
 
-		// Convert directory handle to path
-		dirPath, err := s.fileSystem.FileHandleToPath(req.DirectoryHandle)
-		if err != nil {
-			return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
+        // Get file attributes
+        fileInfo, err := s.fileSystem.GetAttr(ctx, targetPath)
+        if err != nil {
+            return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
 
-		// Get credentials
-		creds := nfs.ProtoCredsToFSCreds(req.Credentials)
+        // Get directory attributes if needed
+        var dirAttrs *api.FileAttributes
+        if handleCtx.Path != targetPath { // Not looking up "."
+            dirInfo, err := s.fileSystem.GetAttr(ctx, handleCtx.Path)
+            if err == nil {
+                dirAttrs = nfs.FSInfoToProtoAttributes(dirInfo)
+            }
+        }
 
-		// Apply root squashing if enabled
-		if s.config.EnableRootSquash && creds.UID == 0 {
-			creds.UID = s.config.AnonUID
-			creds.GID = s.config.AnonGID
-		}
+        // Generate file handle for the target
+        fileHandle, err := s.fileSystem.PathToFileHandle(targetPath)
+        if err != nil {
+            return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
 
-		// Check directory access permission
-		if err := s.fileSystem.Access(ctx, dirPath, fs.FileMode(5), creds); err != nil { // 5 = read + execute
-			return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
+        // Convert file info to NFS attributes
+        attrs := nfs.FSInfoToProtoAttributes(fileInfo)
 
-		// Handle special directory entries
-		targetPath := ""
-		switch req.Name {
-		case ".":
-			targetPath = dirPath
-		case "..":
-			// For parent directory, we need to find the actual parent
-			if dirPath == "/" {
-				// Root directory has itself as parent
-				targetPath = "/"
-			} else {
-				// Get parent directory path
-				targetPath = filepath.Dir(dirPath)
-				if targetPath == "." {
-					targetPath = "/"
-				}
-			}
-		default:
-			// Look up the file in the directory
-			targetPath, _, err = s.fileSystem.Lookup(ctx, dirPath, req.Name)
-			if err != nil {
-				return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
-			}
-		}
+        // Return successful response
+        return &api.LookupResponse{
+            Status:        api.Status_OK,
+            FileHandle:    fileHandle,
+            Attributes:    attrs,
+            DirAttributes: dirAttrs,
+        }, nil
+    })
 
-		// Get file attributes
-		fileInfo, err := s.fileSystem.GetAttr(ctx, targetPath)
-		if err != nil {
-			return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
+    if err != nil {
+        return nil, err
+    }
 
-		// Get directory attributes if needed (optional)
-		var dirAttrs *api.FileAttributes
-		if dirPath != targetPath { // Not looking up "."
-			dirInfo, err := s.fileSystem.GetAttr(ctx, dirPath)
-			if err == nil {
-				dirAttrs = nfs.FSInfoToProtoAttributes(dirInfo)
-			}
-		}
-
-		// Generate file handle for the target
-		fileHandle, err := s.fileSystem.PathToFileHandle(targetPath)
-		if err != nil {
-			return &api.LookupResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
-
-		// Convert file info to NFS attributes
-		attrs := nfs.FSInfoToProtoAttributes(fileInfo)
-
-		// Return successful response
-		return &api.LookupResponse{
-			Status:        api.Status_OK,
-			FileHandle:    fileHandle,
-			Attributes:    attrs,
-			DirAttributes: dirAttrs,
-		}, nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return result.(*api.LookupResponse), nil
+    return result.(*api.LookupResponse), nil
 }
 
 // Read implements the Read RPC method
 func (s *NFSServer) Read(ctx context.Context, req *api.ReadRequest) (*api.ReadResponse, error) {
-	// Create a unique request ID and get client address
-	reqID := fmt.Sprintf("read-%d", time.Now().UnixNano())
-	clientAddr := "unknown"
-	if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
-		clientAddr = (*peer).String()
-	}
+    // Create request context with unique ID
+    reqCtx := s.newRequestContext(ctx, "Read", req)
+    
+    // Process the request
+    result, err := s.processRequest(ctx, reqCtx.Operation, reqCtx.ID, reqCtx.ClientAddr, func() (interface{}, error) {
+        // Process file handle and credentials
+        handleCtx, status, err := s.prepareFileHandle(ctx, req.FileHandle, req.Credentials)
+        if status != api.Status_OK {
+            return &api.ReadResponse{Status: status}, nil
+        }
+        
+        // Check read permission
+        status, err = s.checkAccess(ctx, handleCtx.Path, fs.FileMode(4), handleCtx.Creds) // 4 = read
+        if status != api.Status_OK {
+            return &api.ReadResponse{Status: status}, nil
+        }
 
-	// Process the request
-	result, err := s.processRequest(ctx, "Read", reqID, clientAddr, func() (interface{}, error) {
-		// Validate file handle
-		_, err := s.validateFileHandle(req.FileHandle)
-		if err != nil {
-			return &api.ReadResponse{Status: api.Status_ERR_BADHANDLE}, nil
-		}
+        // Get file attributes
+        fileInfo, err := s.fileSystem.GetAttr(ctx, handleCtx.Path)
+        if err != nil {
+            return &api.ReadResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
 
-		// Convert file handle to path
-		path, err := s.fileSystem.FileHandleToPath(req.FileHandle)
-		if err != nil {
-			return &api.ReadResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
+        // Check if it's a regular file (not a directory)
+        if fileInfo.Type != fs.FileTypeRegular {
+            return &api.ReadResponse{Status: api.Status_ERR_ISDIR}, nil
+        }
 
-		// Get credentials
-		creds := nfs.ProtoCredsToFSCreds(req.Credentials)
+        // Limit read size for security
+        count := req.Count
+        if count > uint32(s.config.MaxReadSize) {
+            count = uint32(s.config.MaxReadSize)
+        }
 
-		// Apply root squashing if enabled
-		if s.config.EnableRootSquash && creds.UID == 0 {
-			creds.UID = s.config.AnonUID
-			creds.GID = s.config.AnonGID
-		}
+        // Read data from file
+        data, eof, err := s.fileSystem.Read(ctx, handleCtx.Path, int64(req.Offset), int(count))
+        if err != nil {
+            return &api.ReadResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
 
-		// Check read permission
-		if err := s.fileSystem.Access(ctx, path, fs.FileMode(4), creds); err != nil { // 4 = read
-			return &api.ReadResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
+        // Update file attributes after read
+        newFileInfo, _ := s.fileSystem.GetAttr(ctx, handleCtx.Path)
+        attrs := nfs.FSInfoToProtoAttributes(newFileInfo)
 
-		// Get file attributes
-		fileInfo, err := s.fileSystem.GetAttr(ctx, path)
-		if err != nil {
-			return &api.ReadResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
+        // Return successful response
+        return &api.ReadResponse{
+            Status:     api.Status_OK,
+            Data:       data,
+            Eof:        eof,
+            Attributes: attrs,
+        }, nil
+    })
 
-		// Check if it's a regular file (not a directory)
-		if fileInfo.Type != fs.FileTypeRegular {
-			return &api.ReadResponse{Status: api.Status_ERR_ISDIR}, nil
-		}
+    if err != nil {
+        return nil, err
+    }
 
-		// Limit read size for security
-		count := req.Count
-		if count > uint32(s.config.MaxReadSize) {
-			count = uint32(s.config.MaxReadSize)
-		}
-
-		// Read data from file
-		data, eof, err := s.fileSystem.Read(ctx, path, int64(req.Offset), int(count))
-		if err != nil {
-			return &api.ReadResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
-
-		// Update file attributes after read
-		newFileInfo, _ := s.fileSystem.GetAttr(ctx, path)
-		attrs := nfs.FSInfoToProtoAttributes(newFileInfo)
-
-		// Return successful response
-		return &api.ReadResponse{
-			Status:     api.Status_OK,
-			Data:       data,
-			Eof:        eof,
-			Attributes: attrs,
-		}, nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return result.(*api.ReadResponse), nil
+    return result.(*api.ReadResponse), nil
 }
 
 // WriteBatch handles a batch of write requests
@@ -603,238 +546,204 @@ func (s *NFSServer) cacheResponse(key string, response interface{}, ttl time.Dur
 
 // ReadDir implements the ReadDir RPC method
 func (s *NFSServer) ReadDir(ctx context.Context, req *api.ReadDirRequest) (*api.ReadDirResponse, error) {
-	reqID := fmt.Sprintf("readdir-%d", time.Now().UnixNano())
-	clientAddr := "unknown"
-	if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
-		clientAddr = (*peer).String()
-	}
+    // Create request context
+    reqCtx := s.newRequestContext(ctx, "ReadDir", req)
 
-	result, err := s.processRequest(ctx, "ReadDir", reqID, clientAddr, func() (interface{}, error) {
-		// Validate directory handle
-		_, err := s.validateFileHandle(req.DirectoryHandle)
-		if err != nil {
-			return &api.ReadDirResponse{Status: api.Status_ERR_BADHANDLE}, nil
-		}
+    result, err := s.processRequest(ctx, reqCtx.Operation, reqCtx.ID, reqCtx.ClientAddr, func() (interface{}, error) {
+        // Process directory handle
+        handleCtx, status, err := s.prepareFileHandle(ctx, req.DirectoryHandle, req.Credentials)
+        if status != api.Status_OK {
+            return &api.ReadDirResponse{Status: status}, nil
+        }
 
-		// Convert directory handle to path
-		dirPath, err := s.fileSystem.FileHandleToPath(req.DirectoryHandle)
-		if err != nil {
-			return &api.ReadDirResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
+        // Check directory read permission
+        status, err = s.checkAccess(ctx, handleCtx.Path, fs.FileMode(4), handleCtx.Creds) // 4 = read
+        if status != api.Status_OK {
+            return &api.ReadDirResponse{Status: status}, nil
+        }
 
-		// Get credentials
-		creds := nfs.ProtoCredsToFSCreds(req.Credentials)
+        // Get file info to verify it's a directory
+        fileInfo, err := s.fileSystem.GetAttr(ctx, handleCtx.Path)
+        if err != nil {
+            return &api.ReadDirResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
 
-		// Apply root squashing if enabled
-		if s.config.EnableRootSquash && creds.UID == 0 {
-			creds.UID = s.config.AnonUID
-			creds.GID = s.config.AnonGID
-		}
+        if fileInfo.Type != fs.FileTypeDirectory {
+            return &api.ReadDirResponse{Status: api.Status_ERR_NOTDIR}, nil
+        }
 
-		// Check directory access permission
-		if err := s.fileSystem.Access(ctx, dirPath, fs.FileMode(4), creds); err != nil { // 4 = read
-			return &api.ReadDirResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
+        // Determine the maximum number of entries to return
+        maxCount := int(req.Count)
+        if maxCount <= 0 {
+            maxCount = 1000 // Default limit if not specified
+        } else if maxCount > 10000 {
+            maxCount = 10000 // Hard upper limit
+        }
 
-		// Get file info to verify it's a directory
-		fileInfo, err := s.fileSystem.GetAttr(ctx, dirPath)
-		if err != nil {
-			return &api.ReadDirResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
+        // Read directory entries
+        entries, _, err := s.fileSystem.ReadDir(ctx, handleCtx.Path, int64(req.Cookie), maxCount)
+        if err != nil {
+            return &api.ReadDirResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
 
-		if fileInfo.Type != fs.FileTypeDirectory {
-			return &api.ReadDirResponse{Status: api.Status_ERR_NOTDIR}, nil
-		}
+        // Convert file system entries to protocol entries
+        protoEntries := make([]*api.DirEntry, len(entries))
+        for i, entry := range entries {
+            protoEntries[i] = &api.DirEntry{
+                FileId: entry.FileId,
+                Name:   entry.Name,
+                Cookie: uint64(entry.Cookie),
+            }
+        }
 
-		// Determine the maximum number of entries to return
-		maxCount := int(req.Count)
-		if maxCount <= 0 {
-			maxCount = 1000 // Default limit if not specified
-		} else if maxCount > 10000 {
-			maxCount = 10000 // Hard upper limit
-		}
+        // Generate a cookie verifier (simple timestamp-based)
+        cookieVerifier := uint64(time.Now().UnixNano())
 
-		// Read directory entries
-		entries, _, err := s.fileSystem.ReadDir(ctx, dirPath, int64(req.Cookie), maxCount)
-		if err != nil {
-			return &api.ReadDirResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
+        // Check if we've reached the end of the directory
+        eof := len(entries) < maxCount
 
-		// Convert file system entries to protocol entries
-		protoEntries := make([]*api.DirEntry, len(entries))
-		for i, entry := range entries {
-			protoEntries[i] = &api.DirEntry{
-				FileId: entry.FileId,
-				Name:   entry.Name,
-				Cookie: uint64(entry.Cookie),
-			}
-		}
+        // Return the response
+        return &api.ReadDirResponse{
+            Status:         api.Status_OK,
+            CookieVerifier: cookieVerifier,
+            Entries:        protoEntries,
+            Eof:            eof,
+        }, nil
+    })
 
-		// Generate a cookie verifier (simple timestamp-based)
-		cookieVerifier := uint64(time.Now().UnixNano())
+    if err != nil {
+        return nil, err
+    }
 
-		// Check if we've reached the end of the directory
-		eof := len(entries) < maxCount
-
-		// Return the response
-		return &api.ReadDirResponse{
-			Status:         api.Status_OK,
-			CookieVerifier: cookieVerifier,
-			Entries:        protoEntries,
-			Eof:            eof,
-		}, nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return result.(*api.ReadDirResponse), nil
+    return result.(*api.ReadDirResponse), nil
 }
 
 // Create implements the Create RPC method
 func (s *NFSServer) Create(ctx context.Context, req *api.CreateRequest) (*api.CreateResponse, error) {
-	// Create a unique request ID and get client address
-	reqID := fmt.Sprintf("create-%d", time.Now().UnixNano())
-	clientAddr := "unknown"
-	if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
-		clientAddr = (*peer).String()
-	}
+    // Create request context
+    reqCtx := s.newRequestContext(ctx, "Create", req)
+    
+    // Process the request
+    result, err := s.processRequest(ctx, reqCtx.Operation, reqCtx.ID, reqCtx.ClientAddr, func() (interface{}, error) {
+        // Process directory handle
+        handleCtx, status, err := s.prepareFileHandle(ctx, req.DirectoryHandle, req.Credentials)
+        if status != api.Status_OK {
+            return &api.CreateResponse{Status: status}, nil
+        }
+        
+        // Check write permission on directory
+        // Note: Write permission check is commented out as in original code
+        // status, err = s.checkAccess(ctx, handleCtx.Path, fs.FileMode(2|1), handleCtx.Creds)
+        // if status != api.Status_OK {
+        //     return &api.CreateResponse{Status: status}, nil
+        // }
 
-	// Process the request
-	result, err := s.processRequest(ctx, "Create", reqID, clientAddr, func() (interface{}, error) {
-		// Validate directory handle
-		_, err := s.validateFileHandle(req.DirectoryHandle)
-		if err != nil {
-			return &api.CreateResponse{Status: api.Status_ERR_BADHANDLE}, nil
-		}
+        // Convert requested attributes to filesystem attributes
+        attr := nfs.ProtoAttributesToFSAttr(req.Attributes)
 
-		// Convert directory handle to path
-		dirPath, err := s.fileSystem.FileHandleToPath(req.DirectoryHandle)
-		if err != nil {
-			return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
+        // Set exclusive create flag based on mode
+        exclusive := false
+        if req.Mode == api.CreateMode_GUARDED || req.Mode == api.CreateMode_EXCLUSIVE {
+            exclusive = true
+        }
 
-		// Get credentials
-		creds := nfs.ProtoCredsToFSCreds(req.Credentials)
+        // Handle EXCLUSIVE mode (check if file exists with this verifier)
+        if req.Mode == api.CreateMode_EXCLUSIVE {
+            // Check if file exists
+            targetPath := filepath.Join(handleCtx.Path, req.Name)
 
-		// Apply root squashing if enabled
-		if s.config.EnableRootSquash && creds.UID == 0 {
-			creds.UID = s.config.AnonUID
-			creds.GID = s.config.AnonGID
-		}
+            // If we have this verifier cached for this path, return the cached response
+            cacheKey := fmt.Sprintf("create-excl-%s-%d", targetPath, req.Verifier)
+            if cachedResp, found := s.getCachedResponse(cacheKey); found {
+                log.Printf("Found cached exclusive create response: %s", cacheKey)
+                return cachedResp, nil
+            }
 
-		// Check write permission on directory
-		// if err := s.fileSystem.Access(ctx, dirPath, fs.FileMode(2|1), creds); err != nil {
-		//     return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		// }
+            // Try to get file info
+            _, err := s.fileSystem.GetAttr(ctx, targetPath)
+            if err == nil {
+                // File exists, return error for GUARDED mode
+                if req.Mode == api.CreateMode_GUARDED {
+                    return &api.CreateResponse{Status: api.Status_ERR_EXIST}, nil
+                }
 
-		// Convert requested attributes to filesystem attributes
-		attr := nfs.ProtoAttributesToFSAttr(req.Attributes)
+                // For EXCLUSIVE mode, create a new response and cache it
+                fileHandle, err := s.fileSystem.PathToFileHandle(targetPath)
+                if err != nil {
+                    return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
+                }
 
-		// Set exclusive create flag based on mode
-		exclusive := false
-		if req.Mode == api.CreateMode_GUARDED || req.Mode == api.CreateMode_EXCLUSIVE {
-			exclusive = true
-		}
+                fileInfo, err := s.fileSystem.GetAttr(ctx, targetPath)
+                if err != nil {
+                    return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
+                }
 
-		// Handle EXCLUSIVE mode (check if file exists with this verifier)
-		if req.Mode == api.CreateMode_EXCLUSIVE {
-			// Check if file exists
-			targetPath := filepath.Join(dirPath, req.Name)
+                // Get directory attributes if requested
+                var dirAttrs *api.FileAttributes
+                dirInfo, err := s.fileSystem.GetAttr(ctx, handleCtx.Path)
+                if err == nil {
+                    dirAttrs = nfs.FSInfoToProtoAttributes(dirInfo)
+                }
 
-			// If we have this verifier cached for this path, return the cached response
-			cacheKey := fmt.Sprintf("create-excl-%s-%d", targetPath, req.Verifier)
-			if cachedResp, found := s.getCachedResponse(cacheKey); found {
-				log.Printf("Found cached exclusive create response: %s", cacheKey)
-				return cachedResp, nil
-			}
+                // Create response
+                resp := &api.CreateResponse{
+                    Status:        api.Status_OK,
+                    FileHandle:    fileHandle,
+                    Attributes:    nfs.FSInfoToProtoAttributes(fileInfo),
+                    DirAttributes: dirAttrs,
+                }
 
-			// Try to get file info
-			_, err := s.fileSystem.GetAttr(ctx, targetPath)
-			if err == nil {
-				// File exists, return error for GUARDED mode
-				if req.Mode == api.CreateMode_GUARDED {
-					return &api.CreateResponse{Status: api.Status_ERR_EXIST}, nil
-				}
+                // Cache the response for this exclusive create
+                s.cacheResponse(cacheKey, resp, 10*time.Minute)
 
-				// For EXCLUSIVE mode, create a new response and cache it
-				fileHandle, err := s.fileSystem.PathToFileHandle(targetPath)
-				if err != nil {
-					return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
-				}
+                return resp, nil
+            }
+        }
 
-				fileInfo, err := s.fileSystem.GetAttr(ctx, targetPath)
-				if err != nil {
-					return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
-				}
+        // Create the file
+        filePath, fileInfo, err := s.fileSystem.Create(ctx, handleCtx.Path, req.Name, attr, exclusive)
+        if err != nil {
+            return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
 
-				// Get directory attributes if requested
-				var dirAttrs *api.FileAttributes
-				dirInfo, err := s.fileSystem.GetAttr(ctx, dirPath)
-				if err == nil {
-					dirAttrs = nfs.FSInfoToProtoAttributes(dirInfo)
-				}
+        // Generate file handle for the new file
+        fileHandle, err := s.fileSystem.PathToFileHandle(filePath)
+        if err != nil {
+            return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
+        }
 
-				// Create response
-				resp := &api.CreateResponse{
-					Status:        api.Status_OK,
-					FileHandle:    fileHandle,
-					Attributes:    nfs.FSInfoToProtoAttributes(fileInfo),
-					DirAttributes: dirAttrs,
-				}
+        // Get directory attributes if requested
+        var dirAttrs *api.FileAttributes
+        dirInfo, err := s.fileSystem.GetAttr(ctx, handleCtx.Path)
+        if err == nil {
+            dirAttrs = nfs.FSInfoToProtoAttributes(dirInfo)
+        }
 
-				// Cache the response for this exclusive create
-				s.cacheResponse(cacheKey, resp, 10*time.Minute)
+        // If EXCLUSIVE mode, cache the response
+        if req.Mode == api.CreateMode_EXCLUSIVE {
+            cacheKey := fmt.Sprintf("create-excl-%s-%d", filepath.Join(handleCtx.Path, req.Name), req.Verifier)
+            s.cacheResponse(cacheKey, &api.CreateResponse{
+                Status:        api.Status_OK,
+                FileHandle:    fileHandle,
+                Attributes:    nfs.FSInfoToProtoAttributes(fileInfo),
+                DirAttributes: dirAttrs,
+            }, 10*time.Minute)
+        }
 
-				return resp, nil
-			}
-		}
+        // Return successful response
+        return &api.CreateResponse{
+            Status:        api.Status_OK,
+            FileHandle:    fileHandle,
+            Attributes:    nfs.FSInfoToProtoAttributes(fileInfo),
+            DirAttributes: dirAttrs,
+        }, nil
+    })
 
-		// Create the file
-		filePath, fileInfo, err := s.fileSystem.Create(ctx, dirPath, req.Name, attr, exclusive)
-		if err != nil {
-			return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
+    if err != nil {
+        return nil, err
+    }
 
-		// Generate file handle for the new file
-		fileHandle, err := s.fileSystem.PathToFileHandle(filePath)
-		if err != nil {
-			return &api.CreateResponse{Status: nfs.MapErrorToStatus(err)}, nil
-		}
-
-		// Get directory attributes if requested
-		var dirAttrs *api.FileAttributes
-		dirInfo, err := s.fileSystem.GetAttr(ctx, dirPath)
-		if err == nil {
-			dirAttrs = nfs.FSInfoToProtoAttributes(dirInfo)
-		}
-
-		// If EXCLUSIVE mode, cache the response
-		if req.Mode == api.CreateMode_EXCLUSIVE {
-			cacheKey := fmt.Sprintf("create-excl-%s-%d", filepath.Join(dirPath, req.Name), req.Verifier)
-			s.cacheResponse(cacheKey, &api.CreateResponse{
-				Status:        api.Status_OK,
-				FileHandle:    fileHandle,
-				Attributes:    nfs.FSInfoToProtoAttributes(fileInfo),
-				DirAttributes: dirAttrs,
-			}, 10*time.Minute)
-		}
-
-		// Return successful response
-		return &api.CreateResponse{
-			Status:        api.Status_OK,
-			FileHandle:    fileHandle,
-			Attributes:    nfs.FSInfoToProtoAttributes(fileInfo),
-			DirAttributes: dirAttrs,
-		}, nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return result.(*api.CreateResponse), nil
+    return result.(*api.CreateResponse), nil
 }
 
 // Mkdir implements the Mkdir RPC method
@@ -964,37 +873,28 @@ func (s *NFSServer) GetRootHandle(ctx context.Context, req *api.GetRootHandleReq
 
 
 // Commit implements the Commit RPC method
+// Commit implements the Commit RPC method
 func (s *NFSServer) Commit(ctx context.Context, req *api.CommitRequest) (*api.CommitResponse, error) {
-    // Create a unique request ID and get client address
-    reqID := fmt.Sprintf("commit-%d", time.Now().UnixNano())
-    clientAddr := "unknown"
-    if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
-        clientAddr = (*peer).String()
-    }
+    // Create request context
+    reqCtx := s.newRequestContext(ctx, "Commit", req)
     
     // Process the request
-    result, err := s.processRequest(ctx, "Commit", reqID, clientAddr, func() (interface{}, error) {
-        // Validate file handle
-        _, err := s.validateFileHandle(req.FileHandle)
-        if err != nil {
-            return &api.CommitResponse{Status: api.Status_ERR_BADHANDLE}, nil
+    result, err := s.processRequest(ctx, reqCtx.Operation, reqCtx.ID, reqCtx.ClientAddr, func() (interface{}, error) {
+        // Process file handle
+        handleCtx, status, err := s.prepareFileHandle(ctx, req.FileHandle, req.Credentials)
+        if status != api.Status_OK {
+            return &api.CommitResponse{Status: status}, nil
         }
         
-        // Convert file handle to path
-        path, err := s.fileSystem.FileHandleToPath(req.FileHandle)
-        if err != nil {
-            return &api.CommitResponse{Status: nfs.MapErrorToStatus(err)}, nil
-        }
-
         // Commit data to stable storage
-        err = s.fileSystem.Commit(ctx, path)
+        err = s.fileSystem.Commit(ctx, handleCtx.Path)
         if err != nil {
             return &api.CommitResponse{Status: nfs.MapErrorToStatus(err)}, nil
         }
         
         // Return successful response
         return &api.CommitResponse{
-            Status:   api.Status_OK,
+            Status: api.Status_OK,
         }, nil
     })
     
@@ -1084,4 +984,75 @@ func (s *NFSServer) Remove(ctx context.Context, req *api.RemoveRequest) (*api.Re
     }
 
     return result.(*api.RemoveResponse), nil
+}
+
+
+
+
+
+// RequestContext holds common information about an RPC request
+type RequestContext struct {
+    ID         string      // Unique request identifier
+    ClientAddr string      // Client address
+    Operation  string      // Operation name (e.g., "GetAttr", "Read")
+    Request    interface{} // The original request
+}
+
+// Creates a new request context with unique ID and client info
+func (s *NFSServer) newRequestContext(ctx context.Context, op string, req interface{}) *RequestContext {
+    reqID := fmt.Sprintf("%s-%d", op, time.Now().UnixNano())
+    clientAddr := "unknown"
+    if peer, ok := ctx.Value("peer").(*net.Addr); ok && peer != nil {
+        clientAddr = (*peer).String()
+    }
+    return &RequestContext{
+        ID:         reqID,
+        ClientAddr: clientAddr,
+        Operation:  op,
+        Request:    req,
+    }
+}
+
+// HandleContext contains processed file handle information
+type HandleContext struct {
+    Path  string         // Resolved file system path
+    Creds fs.Credentials // Processed credentials
+}
+
+// Processes a file handle, returning path and credentials
+// Returns a status code if an error occurs
+func (s *NFSServer) prepareFileHandle(ctx context.Context, handle []byte, credentials *api.Credentials) (*HandleContext, api.Status, error) {
+    // Validate the handle
+    if _, err := s.validateFileHandle(handle); err != nil {
+        return nil, api.Status_ERR_BADHANDLE, nil
+    }
+    
+    // Convert handle to path
+    path, err := s.fileSystem.FileHandleToPath(handle)
+    if err != nil {
+        return nil, nfs.MapErrorToStatus(err), err
+    }
+    
+    // Process credentials
+    creds := nfs.ProtoCredsToFSCreds(credentials)
+    
+    // Apply root squashing if needed
+    if s.config.EnableRootSquash && creds.UID == 0 {
+        creds.UID = s.config.AnonUID
+        creds.GID = s.config.AnonGID
+    }
+    
+    return &HandleContext{
+        Path:  path,
+        Creds: creds,
+    }, api.Status_OK, nil
+}
+
+// Checks access permissions on a path
+// Returns error status if access is denied
+func (s *NFSServer) checkAccess(ctx context.Context, path string, mode fs.FileMode, creds fs.Credentials) (api.Status, error) {
+    if err := s.fileSystem.Access(ctx, path, mode, creds); err != nil {
+        return nfs.MapErrorToStatus(err), err
+    }
+    return api.Status_OK, nil
 }

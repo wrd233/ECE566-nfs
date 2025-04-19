@@ -33,6 +33,12 @@ type Config struct {
 
 	// CacheTTL is the time-to-live for cache entries
 	CacheTTL time.Duration
+
+	// MaxBlockSize is the maximum size of a single read request block (default: 1MB)
+	MaxBlockSize int
+
+	// MaxConcurrentBlocks is the maximum number of concurrent read requests (default: 4)
+	MaxConcurrentBlocks int
 }
 
 // DefaultConfig returns a configuration with sensible defaults
@@ -45,6 +51,8 @@ func DefaultConfig() *Config {
 		BackoffFactor: 2.0,
 		MaxCacheSize:  1000,
 		CacheTTL:      5 * time.Minute,
+		MaxBlockSize:  1024 * 1024,          
+        MaxConcurrentBlocks: 4,
 	}
 }
 

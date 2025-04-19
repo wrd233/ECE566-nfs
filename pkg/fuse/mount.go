@@ -30,6 +30,8 @@ func Mount(options MountOptions) error {
 		ServerAddress: options.ServerAddr,
 		Timeout:       30 * time.Second,
 		MaxRetries:    3,
+		MaxBlockSize:        1024 * 1024,
+        MaxConcurrentBlocks: 4,
 	}
 	
 	log.Printf("Connecting to NFS server at %s", options.ServerAddr)
